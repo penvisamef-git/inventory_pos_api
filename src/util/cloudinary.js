@@ -1,6 +1,6 @@
 // Cloudinary connection + helpers
 // Needs in .env: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
-// Optional:      CLOUDINARY_FOLDER (default "le_blend")
+// Optional:      CLOUDINARY_FOLDER (default "inventory_pos")
 const cloudinary = require("cloudinary").v2;
 
 cloudinary.config({
@@ -10,7 +10,7 @@ cloudinary.config({
   secure: true,
 });
 
-const BASE_FOLDER = process.env.CLOUDINARY_FOLDER || "le_blend";
+const BASE_FOLDER = process.env.CLOUDINARY_FOLDER || "inventory_pos";
 
 // multer (busboy) reads names as latin1 → fix to UTF-8 only when that gives a valid result
 function fixFileName(name = "") {
@@ -96,7 +96,7 @@ function rawUpload(buffer, params, fileName) {
 }
 
 // Upload one file buffer (from multer memoryStorage) → file info to save in DB
-function uploadBuffer(file, subFolder = "menu") {
+function uploadBuffer(file, subFolder = "others") {
   const originalName = fixFileName(file.originalname);
   const dot = originalName.lastIndexOf(".");
   const ext = dot > 0 ? originalName.slice(dot + 1).toLowerCase() : null;
@@ -139,7 +139,7 @@ function deleteFile(public_id, resource_type = "image") {
 }
 
 // Signature for uploading straight from the browser (skips the API size limit)
-function signUpload(subFolder = "menu") {
+function signUpload(subFolder = "others") {
   const timestamp = Math.round(Date.now() / 1000);
   const folder = `${BASE_FOLDER}/${subFolder}`;
   const signature = cloudinary.utils.api_sign_request(

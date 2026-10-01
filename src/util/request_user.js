@@ -21,7 +21,7 @@ async function request_user(req, res, next) {
 
     // Block users that were deleted or suspended after they logged in
     const user = await User.findOne({ _id: session.user_id })
-      .select("-password")
+      .select("-password -pos_pin")
       .lean();
     if (!user || user.deleted || !user.status) {
       return res

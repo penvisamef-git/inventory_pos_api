@@ -1,6 +1,6 @@
 const multer = require("multer");
 
-// One image in a form-data request (e.g. create / update menu item)
+// One image in a form-data request (e.g. create / update product)
 // Field name: "image".  JSON requests pass through untouched.
 const MAX_FILE_MB = 4;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];

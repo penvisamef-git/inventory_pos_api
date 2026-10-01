@@ -28,6 +28,17 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    // POS quick login (4–6 digits, bcrypt hash). Never returned by the API → see has_pos_pin
+    pos_pin: { type: String, default: null },
+
+    // Warehouses / shops this user works in (required for shop manager + cashier: scope "own")
+    warehouse_ids: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Warehouse",
+      },
+    ],
+
     // >>>>>> Default <<<<< //
     note: String,
     status: {
@@ -55,11 +66,14 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.index({ email: 1 });
+userSchema.index({ warehouse_ids: 1 });
 
-// Never send the password hash back to the client
+// Never send the password / PIN hash back to the client
 userSchema.set("toJSON", {
   transform: (doc, ret) => {
+    ret.has_pos_pin = !!ret.pos_pin;
     delete ret.password;
+    delete ret.pos_pin;
     return ret;
   },
 });

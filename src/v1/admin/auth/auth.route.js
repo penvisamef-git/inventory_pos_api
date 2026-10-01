@@ -71,7 +71,9 @@ const route = (prop) => {
 
       // 5. One session per user (a new login replaces the old one)
       const userData = user.toObject();
+      userData.has_pos_pin = !!userData.pos_pin;
       delete userData.password;
+      delete userData.pos_pin;
       const device = helper.extractDeviceInfo(req);
 
       await Session.findOneAndUpdate(

@@ -26,7 +26,7 @@ async function step(title, fn) {
       CLOUDINARY_CLOUD_NAME: env.CLOUDINARY_CLOUD_NAME || "(empty)",
       CLOUDINARY_API_KEY: mask(env.CLOUDINARY_API_KEY),
       CLOUDINARY_API_SECRET: env.CLOUDINARY_API_SECRET ? `set (${env.CLOUDINARY_API_SECRET.length} chars)` : "(empty)",
-      CLOUDINARY_FOLDER: env.CLOUDINARY_FOLDER || "(empty → le_blend)",
+      CLOUDINARY_FOLDER: env.CLOUDINARY_FOLDER || "(empty → inventory_pos)",
     });
     console.log("Proxy vars:", {
       HTTPS_PROXY: env.HTTPS_PROXY || env.https_proxy || null,
@@ -52,7 +52,7 @@ async function step(title, fn) {
       "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D4944415478DA63F8FFFF3F0005FE02FEA7D6A5A50000000049454E44AE426082",
       "hex",
     );
-    const params = { folder: `${env.CLOUDINARY_FOLDER || "le_blend"}/others`, timestamp: Math.round(Date.now() / 1000) };
+    const params = { folder: `${env.CLOUDINARY_FOLDER || "inventory_pos"}/others`, timestamp: Math.round(Date.now() / 1000) };
     const signature = cloudinary.utils.api_sign_request(params, env.CLOUDINARY_API_SECRET);
     const fields = { ...params, api_key: env.CLOUDINARY_API_KEY, signature };
 

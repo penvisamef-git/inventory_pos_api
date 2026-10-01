@@ -1,0 +1,119 @@
+// Turn business actions into Telegram events. Every function is fire-and-forget (never throws, never awaited by callers).
+const WarehouseModel = require("../setup/warehouse/warehouse.model");
+const { notify, esc } = require("./telegram.service");
+
+const REASON = {
+  damaged: ["ខូចខាត", "Damaged"], expired: ["ផុតកំណត់", "Expired"], lost: ["បាត់", "Lost"], found: ["រកឃើញ", "Found"], other: ["ផ្សេងៗ", "Other"], transfer_shortage: ["ខ្វះពេលផ្ទេរ", "Transfer shortage"],
+};
+const usd = (v) => `$${Number(v || 0).toFixed(2)}`;
+const who = (req) => `${req?.user?.firstname || ""} ${req?.user?.lastname || ""}`.trim() || req?.user?.email || "-";
+const codeOf = async (id) => (id?.code ? id.code : (await WarehouseModel.findById(id).select("code").lean())?.code || "-");
+const idOf = (w) => w?._id || w;
+// "• SKU × qty unit" lines (HTML-escaped)
+const itemLines = (items, max = 8, signed = false) => {
+  const rows = items.slice(0, max).map((i) => `• ${esc(i.sku)} × ${signed ? i.qty : Math.abs(i.qty)} ${esc(i.unit_code || "")}`);
+  if (items.length > max) rows.push(`… +${items.length - max}`);
+  return rows.join("\n");
+};
+const run = (fn) => {
+  Promise.resolve()
+    .then(fn)
+    .catch((err) => console.error("telegram hook:", err.message));
+};
+
+const qtyOf = (items) => items.reduce((t, i) => t + Math.abs(i.base_qty || 0), 0);
+
+const hooks = {
+  transferCreated: (doc, req) =>
+    run(async () => {
+      if (doc.state !== "requested") return;
+      await notify("transfer_requested", {
+        warehouse_ids: [idOf(doc.warehouse_id), idOf(doc.to_warehouse_id)],
+        data: { doc_no: doc.doc_no, from: await codeOf(doc.warehouse_id), to: await codeOf(doc.to_warehouse_id), lines: doc.items.length, user: who(req) },
+        ref: { type: "transfer", id: doc._id },
+      });
+    }),
+
+  transferDispatched: (doc, req) =>
+    run(async () =>
+      notify("transfer_dispatched", {
+        warehouse_ids: [idOf(doc.warehouse_id), idOf(doc.to_warehouse_id)],
+        data: { doc_no: doc.doc_no, from: await codeOf(doc.warehouse_id), to: await codeOf(doc.to_warehouse_id), lines: doc.items.length, qty: qtyOf(doc.items), user: who(req) },
+        ref: { type: "transfer", id: doc._id },
+      }),
+    ),
+
+  transferReceived: (doc, req) =>
+    run(async () => {
+      const base = { from: await codeOf(doc.warehouse_id), to: await codeOf(doc.to_warehouse_id), doc_no: doc.doc_no, user: who(req) };
+      const wh = [idOf(doc.warehouse_id), idOf(doc.to_warehouse_id)];
+      await notify("transfer_received", { warehouse_ids: wh, data: { ...base, lines: doc.items.length, qty: doc.items.reduce((t, i) => t + (i.received_base_qty || 0), 0) }, ref: { type: "transfer", id: doc._id } });
+      if (doc.shortage_qty > 0) {
+        const short = doc.items.filter((i) => (i.received_qty ?? i.qty) < i.qty).map((i) => ({ ...i.toObject?.() ?? i, qty: i.qty - (i.received_qty ?? i.qty) }));
+        await notify("transfer_shortage", {
+          warehouse_ids: wh,
+          data: { ...base, shortage_qty: doc.shortage_qty, shortage_cost: usd(doc.shortage_cost), note: doc.receive_note || "-", __raw: { items: itemLines(short) } },
+          ref: { type: "transfer", id: doc._id },
+        });
+      }
+    }),
+
+  // a shop manager saved a draft → central must approve
+  adjustmentCreated: (doc, req) =>
+    run(async () => {
+      if (doc.state !== "draft" || !req.warehouse_ids) return;
+      const [kh, en] = REASON[doc.reason] || [doc.reason, doc.reason];
+      await notify("adjustment_waiting", {
+        warehouse_ids: [idOf(doc.warehouse_id)],
+        data: { warehouse: await codeOf(doc.warehouse_id), reason: kh, doc_no: doc.doc_no, user: who(req), __raw: { items: itemLines(doc.items) }, __en: { reason: en } },
+        ref: { type: "stock_adjustment", id: doc._id },
+      });
+    }),
+
+  adjustmentPosted: (doc, req) =>
+    run(async () => {
+      const [kh, en] = REASON[doc.reason] || [doc.reason, doc.reason];
+      await notify("adjustment_posted", {
+        warehouse_ids: [idOf(doc.warehouse_id)],
+        data: { warehouse: await codeOf(doc.warehouse_id), reason: kh, doc_no: doc.doc_no, cost: usd(doc.posted_cost), user: who(req), __raw: { items: itemLines(doc.items, 8, true) }, __en: { reason: en } },
+        ref: { type: "stock_adjustment", id: doc._id },
+      });
+    }),
+
+  goodsReceived: (doc, req) =>
+    run(async () => {
+      const SupplierModel = require("../purchase/supplier/supplier.model");
+      const sup = doc.supplier_id?.name || (await SupplierModel.findById(doc.supplier_id).select("name").lean())?.name || "-";
+      await notify("goods_received", {
+        warehouse_ids: [idOf(doc.warehouse_id)],
+        data: { doc_no: doc.doc_no, supplier: sup, warehouse: await codeOf(doc.warehouse_id), lines: doc.items.length, qty: qtyOf(doc.items), cost: usd(doc.posted_cost ?? doc.total_cost), user: who(req) },
+        ref: { type: "goods_receive", id: doc._id },
+      });
+    }),
+
+  // rows: [{ variant code, price, warehouse code|null }]
+  priceChanged: (rows, startAt, req) =>
+    run(async () => {
+      if (!rows.length) return;
+      const shops = [...new Set(rows.map((r) => r.warehouse_id).filter(Boolean).map(String))];
+      const lines = rows.slice(0, 10).map((r) => `• ${esc(r.sku)} ${r.unit ? esc(r.unit) + " " : ""}= ${r.price === null ? "default" : usd(r.price)}${r.shop ? ` (${esc(r.shop)})` : ""}`);
+      if (rows.length > 10) lines.push(`… +${rows.length - 10}`);
+      await notify("price_changed", {
+        warehouse_ids: shops,
+        data: { count: rows.length, scope: shops.length ? "shop" : "default", from_date: new Date(startAt).toLocaleString("en-GB", { timeZone: "Asia/Phnom_Penh", hour12: false }), user: who(req), __raw: { items: lines.join("\n") } },
+      });
+    }),
+
+  staffChanged: (user, warehouseId, action, req) =>
+    run(async () => {
+      const ACT = { created: ["បានបន្ថែម", "added"], disabled: ["បានបិទ", "disabled"], enabled: ["បានបើក", "enabled"], pin: ["បានប្តូរ PIN", "PIN changed"] };
+      const [kh, en] = ACT[action] || [action, action];
+      await notify("staff_changed", {
+        warehouse_ids: [warehouseId],
+        data: { warehouse: await codeOf(warehouseId), action: kh, name: `${user.firstname} ${user.lastname}`.trim(), user: who(req), __en: { action: en } },
+        ref: { type: "user", id: user._id },
+      });
+    }),
+};
+
+module.exports = hooks;

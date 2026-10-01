@@ -39,17 +39,13 @@ connectDB();
 app.get("/", api_auth, (req, res) => {
   res.send({
     success: true,
-    message: "Le Blend Menu API Connected",
+    message: "Inventory POS API Connected",
   });
 });
 
 // ================= Routes =================
 const prop = { app, jwt, api_auth, jwt_auth, request_user };
 adminAPI_V1(prop);
-
-// Public menu (no login) — /api/public/...
-const publicAPI_V1 = require("./src/v1/public/index.route");
-publicAPI_V1(prop);
 
 // 404 for unknown routes
 app.use((req, res) => {
@@ -70,6 +66,8 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server is running on ${PORT}`);
   });
+  // Telegram: send queued messages + scheduled reports (only in the real server, not in scripts / tests)
+  require("./src/v1/admin/telegram/telegram.service").startWorker();
 }
 
 // 🧼 Gracefully handle shutdown

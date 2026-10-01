@@ -1,6 +1,6 @@
 const multer = require("multer");
 const { uploadBuffer, deleteFile, signUpload, ping } = require("../../../util/cloudinary");
-const { can_manage_menu } = require("../../../util/permission");
+const { can_manage_product } = require("../../../util/permission");
 const baseRoute = "upload";
 
 // Keep files in memory, then stream them to Cloudinary
@@ -21,12 +21,12 @@ const upload = multer({
 });
 
 // Allowed sub folders inside CLOUDINARY_FOLDER
-const FOLDERS = ["menu", "category", "banner", "setting", "others"];
+const FOLDERS = ["product", "category", "brand", "setting", "others"];
 
 const route = (prop) => {
   const urlAPI = `/${prop.main_route}/${baseRoute}`;
   const serverError = "ម៉ាសុីនមេមានបញ្ហា សូមព្យាយាមម្តងទៀតពេលក្រោយ!";
-  const guard = [prop.api_auth, prop.jwt_auth, prop.request_user, can_manage_menu];
+  const guard = [prop.api_auth, prop.jwt_auth, prop.request_user, can_manage_product];
 
   // ===================================== TEST CONNECTION ================================================
   prop.app.get(`${urlAPI}/ping`, ...guard, async (req, res) => {
@@ -43,8 +43,8 @@ const route = (prop) => {
   });
 
   // ===================================== UPLOAD (multiple images) ================================================
-  // form-data: files = <file> (repeat for many), folder = menu | category | banner | setting | others
-  // → returns image objects; save one of them in menu_item.image / category.icon / banner.image
+  // form-data: files = <file> (repeat for many), folder = product | category | brand | setting | others
+  // → returns image objects; save one of them in product.image / category.image / brand.logo / setting.logo
   prop.app.post(
     `${urlAPI}`,
     ...guard,
@@ -67,7 +67,7 @@ const route = (prop) => {
         if (!req.files || req.files.length === 0) {
           return res.status(400).json({ success: false, message: "សូមជ្រើសរើសរូបភាព!" });
         }
-        const folder = FOLDERS.includes(req.body.folder) ? req.body.folder : "menu";
+        const folder = FOLDERS.includes(req.body.folder) ? req.body.folder : "others";
         const data = await Promise.all(req.files.map((f) => uploadBuffer(f, folder)));
         res.status(201).json({ success: true, count: data.length, data });
       } catch (err) {
@@ -85,7 +85,7 @@ const route = (prop) => {
 
   // ===================================== SIGNATURE (direct upload from browser) ================================================
   prop.app.get(`${urlAPI}/signature`, ...guard, (req, res) => {
-    const folder = FOLDERS.includes(req.query.folder) ? req.query.folder : "menu";
+    const folder = FOLDERS.includes(req.query.folder) ? req.query.folder : "others";
     res.json({ success: true, data: signUpload(folder) });
   });
 
@@ -97,7 +97,7 @@ const route = (prop) => {
       if (!public_id) {
         return res.status(400).json({ success: false, message: "សូមបញ្ចូល public_id" });
       }
-      const baseFolder = process.env.CLOUDINARY_FOLDER || "le_blend";
+      const baseFolder = process.env.CLOUDINARY_FOLDER || "inventory_pos";
       if (!String(public_id).startsWith(`${baseFolder}/`)) {
         return res.status(400).json({ success: false, message: "public_id មិនត្រឹមត្រូវ" });
       }

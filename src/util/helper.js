@@ -86,6 +86,24 @@ function escapeRegex(text = "") {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Round money / qty: round(1.005, 2) → 1.01   (USD totals 2 dp, line prices 4 dp)
+function round(value, dp = 2) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const factor = 10 ** dp;
+  return Math.round((n + Number.EPSILON) * factor) / factor;
+}
+
+// true when another non-deleted row already uses this code
+// codeExists(UnitModel, "box")                → create
+// codeExists(UnitModel, "box", id)            → update (skip itself)
+// codeExists(PriceModel, code, id, { x: 1 })  → extra filter
+async function codeExists(Model, code, excludeId = null, extraFilter = {}) {
+  const filter = { code: String(code).trim(), deleted: false, ...extraFilter };
+  if (excludeId) filter._id = { $ne: excludeId };
+  return !!(await Model.exists(filter));
+}
+
 module.exports = {
   cambodiaDate,
   extractDeviceInfo,
@@ -94,4 +112,6 @@ module.exports = {
   pick,
   removeEmpty,
   escapeRegex,
+  round,
+  codeExists,
 };

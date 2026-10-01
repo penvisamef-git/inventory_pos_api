@@ -7,7 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon",
     "seed": "node scripts/seed.js",
-    "seed:books": "node scripts/seed-books.js"
+    "seed:sample": "node scripts/seed-sample.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
