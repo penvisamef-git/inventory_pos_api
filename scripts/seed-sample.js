@@ -2,6 +2,7 @@
 // Safe to run again: rows are matched by code and only created when missing.
 // Needs a super admin first (npm run seed).   Usage: npm run seed:sample
 require("dotenv").config();
+require("./lib/test_db_guard").assertTestDb("Sample data");
 const mongoose = require("mongoose");
 const connectDB = require("../src/util/db");
 const User = require("../src/v1/admin/user/user.model");

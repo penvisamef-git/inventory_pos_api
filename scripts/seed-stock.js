@@ -1,3 +1,5 @@
+require("dotenv").config();
+require("./lib/test_db_guard").assertTestDb("Sample stock");
 // UAT sample STOCK data (Phase 2) — called by seed-sample.js after products and prices.
 // Goes through the real API in-process (same rules as the admin web), signed in as the sample users.
 // Safe to run again: skipped when WH01 already has an opening stock document.

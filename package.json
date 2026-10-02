@@ -7,7 +7,10 @@
     "start": "node index.js",
     "dev": "nodemon",
     "seed": "node scripts/seed.js",
-    "seed:sample": "node scripts/seed-sample.js"
+    "seed:sample": "node scripts/seed-sample.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js",
+    "test": "node tests/run.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

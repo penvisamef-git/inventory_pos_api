@@ -26,4 +26,8 @@ const sessionSchema = new mongoose.Schema(
 sessionSchema.index({ access_token: 1 });
 sessionSchema.index({ user_id: 1 });
 
+// logout / force logout → forget cached logins (src/util/auth_cache.js)
+const { clearAuthCache } = require("../../../util/auth_cache");
+["deleteOne", "deleteMany", "findOneAndDelete", "findOneAndUpdate", "updateOne", "updateMany"].forEach((op) => sessionSchema.post(op, clearAuthCache));
+
 module.exports = mongoose.model("Session", sessionSchema);

@@ -9,6 +9,7 @@ const { serverError, noIDFound } = require("../../../../util/master_crud");
 const { can_manage_product, can_view_master } = require("../../../../util/permission");
 const { buildProduct, categoryWithChildren, productIdsByVariantText, isId } = require("./product.service");
 const { priceRanges } = require("../price/price.service");
+const { importRows, exportRows, codeLists, COLUMNS } = require("./product.import");
 
 const document = "ទំនិញ";
 const noDataFound = "មិនមានទំនិញនៅក្នុងប្រព័ន្ធ!";
@@ -94,6 +95,44 @@ const route = (prop) => {
       await session.endSession();
     }
   }
+
+  // ===================================== EXCEL IMPORT / EXPORT ================================================
+  // POST /product/import { rows: [{ product_code, name_kh, … }], apply: false | true } → preview / save (product.import.js)
+  //   Send ≤ 2000 rows per call (the web sends ~50 products at a time). Each product is saved on its own.
+  prop.app.post(`/${prop.main_route}/product/import`, ...editGuard, async (req, res) => {
+    try {
+      const apply = req.body?.apply === true;
+      const r = await importRows(req.body?.rows, { apply, userId: req.session.user_id, saveAll, stockLock });
+      if (r.error) return res.status(400).json({ success: false, message: r.error });
+      if (apply && (r.summary.create || r.summary.update)) {
+        await logActivity({
+          title: `នាំចូលទំនិញពី Excel: ${r.summary.create} ថ្មី, ${r.summary.update} កែ${r.summary.error ? `, ${r.summary.error} កំហុស` : ""}`,
+          description: `គណនី: ${req.user.email} · ${r.summary.variants} ប្រភេទរង · ${r.summary.prices} តម្លៃ`,
+          categoryTitle: "product",
+          createdBy: req.session.user_id,
+          req,
+        });
+      }
+      res.status(200).json({ success: true, data: r, message: apply ? `បានរក្សាទុក ${r.summary.create + r.summary.update} ទំនិញ` : undefined });
+    } catch (err) {
+      res.status(500).json({ success: false, message: serverError, error: err.message });
+    }
+  });
+  // GET /product/import/export → all products as import rows (+ columns) · GET /product/import/lists → codes for the template
+  prop.app.get(`/${prop.main_route}/product/import/export`, ...editGuard, async (req, res) => {
+    try {
+      res.status(200).json({ success: true, data: { columns: COLUMNS, rows: await exportRows() } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: serverError, error: err.message });
+    }
+  });
+  prop.app.get(`/${prop.main_route}/product/import/lists`, ...editGuard, async (req, res) => {
+    try {
+      res.status(200).json({ success: true, data: { columns: COLUMNS, ...(await codeLists()) } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: serverError, error: err.message });
+    }
+  });
 
   // ===================================== CREATE ================================================
   // body: product fields + variants: [{ options: [{ attribute_id, value_id }], code?, barcode, unit_barcodes, image, min_stock, status }]

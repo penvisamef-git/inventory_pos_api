@@ -24,9 +24,9 @@ const route = (prop) => {
     viewGuard: [prop.api_auth, prop.jwt_auth, prop.request_user, can_view_master, warehouse_scope],
     editGuard: [prop.api_auth, prop.jwt_auth, prop.request_user, can_work_stock, warehouse_scope],
     postGuard: [prop.api_auth, prop.jwt_auth, prop.request_user, can_manage_stock, warehouse_scope],
-    populate: [{ path: "transfer_id", select: "doc_no" }],
+    populate: [{ path: "transfer_id", select: "doc_no" }, { path: "count_id", select: "doc_no" }],
     listFilter: (req) => (StockAdjustmentModel.REASONS.includes(req.query.reason) ? [{ reason: req.query.reason }] : []),
-    canEdit: (req, doc) => (doc.reason === "transfer_shortage" ? "ការកែតម្រូវនេះបង្កើតដោយប្រព័ន្ធ មិនអាចកែបានទេ!" : null),
+    canEdit: (req, doc) => (["transfer_shortage", "stock_count"].includes(doc.reason) ? "ការកែតម្រូវនេះបង្កើតដោយប្រព័ន្ធ មិនអាចកែបានទេ!" : null),
     build: async (b, { req }) => {
       const whId = b.warehouse_id?._id || b.warehouse_id;
       if (!isId(whId) || !(await WarehouseModel.exists({ _id: whId, deleted: false }))) return { error: "សូមជ្រើសរើសឃ្លាំង!" };

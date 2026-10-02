@@ -7,6 +7,8 @@ const compression = require("compression");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 
+// must load before any model: counts DB calls per request (Server-Timing / slow log)
+const { reqStore } = require("./src/util/db_timing");
 const connectDB = require("./src/util/db");
 const { api_auth } = require("./src/util/api_auth");
 const { jwt_auth } = require("./src/util/jwt_auth");
@@ -17,24 +19,74 @@ const PORT = process.env.api_port || 8086;
 const app = express();
 
 // ================= Middleware =================
-app.use(cors());
+// CORS: only our admin web may call the API from a browser.
+// Extra sites (new domain, POS app …): CORS_ORIGINS="https://a.com,https://b.com" in .env / Vercel ("*" = any, not recommended).
+// Calls without an Origin header (Postman, server-to-server, uptime checks) are not affected.
+const CORS_DEFAULT = [
+  "https://inventory-pos-kh.web.app",
+  "https://inventory-pos-kh.firebaseapp.com",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+];
+const corsOrigins = new Set([
+  ...CORS_DEFAULT,
+  ...String(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+]);
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, !origin || corsOrigins.has("*") || corsOrigins.has(origin)),
+    exposedHeaders: ["Server-Timing", "Retry-After"],
+    maxAge: 86400, // browsers cache the preflight for a day → fewer OPTIONS calls
+  }),
+);
 app.use(helmet());
 app.use(compression());
 
-// Log only slow requests (> 500 ms)
+// Timing: every response gets "Server-Timing: app;dur=… , db;desc=\"N calls\"" (browser DevTools → Network → Timing)
+// and slow requests (> 500 ms) are logged with their DB call count.
 app.use((req, res, next) => {
   const start = process.hrtime.bigint();
+  const store = { db: 0 };
+  const ms = () => Number(process.hrtime.bigint() - start) / 1e6;
+  const writeHead = res.writeHead;
+  res.writeHead = function (...args) {
+    if (!res.headersSent) {
+      res.setHeader("Server-Timing", `app;dur=${ms().toFixed(0)}, db;desc="${store.db} calls"`);
+      res.setHeader("Timing-Allow-Origin", "*");
+    }
+    return writeHead.apply(this, args);
+  };
   res.on("finish", () => {
-    const ms = Number(process.hrtime.bigint() - start) / 1e6;
-    if (ms > 500) console.log(`[slow] ${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(0)}ms`);
+    const t = ms();
+    if (t > 500) console.log(`[slow] ${req.method} ${req.originalUrl} ${res.statusCode} ${t.toFixed(0)}ms · ${store.db} db calls`);
   });
-  next();
+  reqStore.run(store, next);
 });
 
 app.use(express.json({ limit: "2mb" }));
 
 // ================= Connection =================
 connectDB();
+
+// Keep-awake / uptime check (no key needed, no data): an uptime service can call it every 5 min
+// so the Vercel function stays warm and the DB connection stays open.
+app.get("/health", async (req, res) => {
+  const t = Date.now();
+  let db = "down";
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.db.admin().command({ ping: 1 });
+      db = "ok";
+    }
+  } catch {
+    db = "error";
+  }
+  res.set("Cache-Control", "no-store").json({ ok: db === "ok", db, ms: Date.now() - t });
+});
 
 app.get("/", api_auth, (req, res) => {
   res.send({

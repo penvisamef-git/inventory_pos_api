@@ -6,7 +6,8 @@ const { escapeRegex } = require("../helper");
 //   page, limit, sort, order=asc|desc, includeDeleted=true
 //   q=<text> & q_key=["name_en","name_kh"]      → keyword search
 //   q_id=["<id>"] & q_key_id=["category_id"]   → filter by ids
-async function getFilteredMongoDB(query, Model, populate = [], additionalFilter = []) {
+// select: optional field selection (e.g. "-lines" to leave big arrays out of a list)
+async function getFilteredMongoDB(query, Model, populate = [], additionalFilter = [], select = null) {
   // Pagination
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 200);
@@ -102,6 +103,7 @@ async function getFilteredMongoDB(query, Model, populate = [], additionalFilter 
   // Query database with filter, pagination, sorting
   const [data, total] = await Promise.all([
     Model.find(mongoFilter)
+      .select(select || undefined)
       .sort({ [sortField]: sortOrder, _id: sortOrder })
       .populate(populate)
       .skip(skip)

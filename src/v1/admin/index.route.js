@@ -51,10 +51,28 @@ const index = (prop) => {
   adjustmentRoute(prop);
   const transferRoute = require("./stock/transfer/transfer.route");
   transferRoute(prop);
+  const countRoute = require("./stock/count/count.route");
+  countRoute(prop);
 
   // ================= Shop portal =================
   const shopRoute = require("./shop/shop.route");
   shopRoute(prop);
+
+  // ================= QR code / public catalog =================
+  const catalogRoute = require("./catalog/catalog.route");
+  catalogRoute(prop);
+
+  // ================= Other: personal notes =================
+  const noteRoute = require("./note/note.route");
+  noteRoute(prop);
+
+  // ================= Global search =================
+  const searchRoute = require("./search/search.route");
+  searchRoute(prop);
+
+  // ================= Dashboard =================
+  const dashboardRoute = require("./dashboard/dashboard.route");
+  dashboardRoute(prop);
 
   // ================= Telegram =================
   const telegramRoute = require("./telegram/telegram.route");

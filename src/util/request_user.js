@@ -1,6 +1,7 @@
 const Session = require("../v1/admin/session/session.model");
 const User = require("../v1/admin/user/user.model");
 const { getToken } = require("./jwt_auth");
+const { getAuth, setAuth } = require("./auth_cache");
 
 // Finds the session of this token → req.session (user_id, user_data, ...)
 async function request_user(req, res, next) {
@@ -10,6 +11,13 @@ async function request_user(req, res, next) {
       return res
         .status(401)
         .json({ success: false, message: "No token provided" });
+    }
+
+    const cached = getAuth(token);
+    if (cached) {
+      req.session = cached.session;
+      req.user = cached.user;
+      return next();
     }
 
     const session = await Session.findOne({ access_token: token });
@@ -31,6 +39,7 @@ async function request_user(req, res, next) {
 
     req.session = session;
     req.user = user;
+    setAuth(token, session, user);
     next();
   } catch (err) {
     res.status(500).json({ success: false, message: "Internal Server Error" });

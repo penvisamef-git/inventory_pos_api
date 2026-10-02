@@ -4,6 +4,7 @@ const { notify, esc } = require("./telegram.service");
 
 const REASON = {
   damaged: ["ខូចខាត", "Damaged"], expired: ["ផុតកំណត់", "Expired"], lost: ["បាត់", "Lost"], found: ["រកឃើញ", "Found"], other: ["ផ្សេងៗ", "Other"], transfer_shortage: ["ខ្វះពេលផ្ទេរ", "Transfer shortage"],
+  stock_count: ["រាប់ស្តុក", "Stock count"],
 };
 const usd = (v) => `$${Number(v || 0).toFixed(2)}`;
 const who = (req) => `${req?.user?.firstname || ""} ${req?.user?.lastname || ""}`.trim() || req?.user?.email || "-";

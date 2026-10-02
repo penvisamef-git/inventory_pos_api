@@ -78,4 +78,9 @@ userSchema.set("toJSON", {
   },
 });
 
+// any change to a user (role, status, warehouses, delete …) → forget cached logins (src/util/auth_cache.js)
+const { clearAuthCache } = require("../../../util/auth_cache");
+userSchema.post("save", clearAuthCache);
+["findOneAndUpdate", "updateOne", "updateMany", "deleteOne", "deleteMany", "findOneAndDelete", "replaceOne"].forEach((op) => userSchema.post(op, clearAuthCache));
+
 module.exports = mongoose.model("User", userSchema);

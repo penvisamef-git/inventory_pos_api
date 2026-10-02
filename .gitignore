@@ -6,3 +6,6 @@ node_modules
 *.log
 
 .claude-backup/
+
+# database backups (npm run backup) — never commit
+backups/

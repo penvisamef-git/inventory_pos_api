@@ -1,0 +1,35 @@
+# Nightly database backup (02:00 Cambodia time) → downloadable "Artifact" on GitHub, kept 30 days.
+# Setup once: GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
+#   MONGO_USER, MONGO_PASS, MONGO_DB  (the REAL database to back up, e.g. inventory_pos_prod)
+# Run by hand: Actions → "Database backup" → Run workflow.
+# The backup holds all data (incl. password hashes): keep this repository private.
+name: Database backup
+
+on:
+  schedule:
+    - cron: "0 19 * * *" # 19:00 UTC = 02:00 Asia/Phnom_Penh
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Backup
+        env:
+          MONGO_USER: ${{ secrets.MONGO_USER }}
+          MONGO_PASS: ${{ secrets.MONGO_PASS }}
+          MONGO_DB: ${{ secrets.MONGO_DB }}
+          TELEGRAM_WORKER: "off"
+        run: node scripts/backup.js --out backup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_number }}
+          path: backup/
+          retention-days: 30

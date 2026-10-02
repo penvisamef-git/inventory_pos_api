@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const imageSchema = require("../../../../util/image.schema");
 
 const TAX_MODES = ["none", "inclusive", "exclusive"];
+// Look of the admin web + shop portal for everyone (light / dark stays each user's choice)
+const UI_THEMES = ["forest", "ocean", "candy", "navy"];
 
 // One document only (key: "main") — company, receipt, tax and stock alert settings
 const settingSchema = new mongoose.Schema(
@@ -34,6 +36,9 @@ const settingSchema = new mongoose.Schema(
     low_stock_default: { type: Number, default: 5, min: 0 },
     expiry_alert_days: { type: Number, default: 30, min: 0 },
 
+    // ---- Look (admin web + shop portal) ----
+    ui_theme: { type: String, enum: UI_THEMES, default: "forest" },
+
     updated_by: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -56,5 +61,7 @@ SettingModel.getMain = async function () {
     { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
   );
 };
+
+SettingModel.UI_THEMES = UI_THEMES;
 
 module.exports = SettingModel;

@@ -106,6 +106,9 @@ Create body: `{ firstname, lastname, email, password, role, warehouse_ids?, cont
 ### Session / Activity log (admin)
 `GET /session`, `DELETE /session/:id` (force logout), `GET /activity_log?category=product`, `GET /activity_log/category-all`
 
+- **Who sees the activity log** (`GET /activity_log`, any signed-in user): super admin → every row · admin → every row except super admins' · any other role → only their own rows (`scope: "own"` in the answer). Sessions stay admin only.
+- **Super admins leave no trace here:** their logins and changes are not written to the activity log, older rows of theirs are hidden from the list, their sessions are not listed and can't be force-logged-out (super admin ids are cached 60 s).
+
 ### Upload (admin, central warehouse manager)
 | Method | Path | Body |
 |---|---|---|
@@ -129,6 +132,8 @@ View: admin, central manager, accountant, shop manager (own shops only) · Edit:
 
 ### Setting — `/setup/setting` (view: all web roles · edit: admin)
 `GET`, `PUT` `{ company_name_kh, company_name_en, logo, address, phone, email, vat_no, khr_rounding, tax_mode: none|inclusive|exclusive, tax_rate, tax_name, receipt_header, receipt_footer, low_stock_default, expiry_alert_days }`
+
+Setting also has `ui_theme`: `forest | ocean | candy | navy` (admin web look for everyone). `GET /setup/theme` → `{ ui_theme }` needs only the API key (login page).
 
 ### Exchange rate — `/setup/exchange-rate` (view: all web roles · edit: admin)
 `POST { rate, effective_from, note }`, `GET` (history, rows have `state: current|upcoming|past`), `GET /current`, `GET /:id`, `PUT /:id`, `DELETE /:id`
@@ -218,6 +223,18 @@ Sale price in USD per **variant + unit**, with history. `warehouse_id: null` = d
 - Deleting an upcoming row gives its period back to the previous row.
 - Product list rows have `price_range: { min, max, count }` (current default base-unit price; `count` < `variant_count` → some variants have no price yet).
 
+### Product Excel import — `/product/import` (admin, central manager)
+| Method | Route | |
+|---|---|---|
+| `POST` | `/product/import` | `{ rows: [{ _row, product_code, name_kh, … }], apply: false \| true }` → `{ summary: { products, create, update, error, variants, prices }, results: [{ product_code, rows, action: create\|update\|error, message, variants, prices }] }` · ≤ 2000 rows per call |
+| `GET` | `/product/import/export` | every product as import rows (today's default prices) + `columns` |
+| `GET` | `/product/import/lists` | `columns` + category / brand / unit codes + options (`size=0_3m`) for the template |
+
+Columns: `product_code, name_kh, name_en, category, brand, base_unit, track_batch, min_stock, option_1..3 (attr=value), sku, barcode, unit_2, unit_2_factor, unit_2_barcode, price, unit_2_price`.
+- One row = one SKU; rows with the same `product_code` = one product. **Create + update by code**; a blank cell keeps the current value; import **never deletes** variants or prices.
+- `apply: false` = preview (nothing saved). Each product is checked and saved on its own: one bad product doesn't stop the others. Duplicate barcode / SKU in the file stops every product involved.
+- A price row is added only when the price changed (history kept, starts now). `unit_2` with a price becomes a sale unit. Locks from Phase 2 still apply (base unit / batch / factors of products with stock).
+
 ## Stock (Phase 2)
 
 Stock is counted per **variant × warehouse**, always in the product's **base unit**. Every in / out is a row in `StockMovement` (append-only ledger with `balance_after`, `avg_cost_after`); `StockBalance` / `StockBatchBalance` are caches updated in the same transaction.
@@ -232,10 +249,25 @@ Stock is counted per **variant × warehouse**, always in the product's **base un
 |---|---|---|---|---|
 | Opening stock | `/stock/opening` | OB-yymm-0001 | admin, central | cost required, batch + expiry for batch products; Excel import in the admin |
 | Goods receive | `/stock/receive` | GR-… | admin, central (view: + accountant) | **central warehouse only**; `supplier_id`, `supplier_invoice_no` |
-| Adjustment | `/stock/adjustment` | ADJ-… | shop manager drafts (own shop) → admin / central post | `reason`: damaged · expired · lost (OUT) · found (IN) · other (±) · transfer_shortage (system) |
+| Adjustment | `/stock/adjustment` | ADJ-… | shop manager drafts (own shop) → admin / central post | `reason`: damaged · expired · lost (OUT) · found (IN) · other (±) · transfer_shortage, stock_count (system) |
 | Transfer | `/stock/transfer` | TR-… | see below | states `requested → (draft) → dispatched → received`, `cancelled` |
 
 Transfer: shop manager `POST` = **request** from central to own shop (`requested_items` kept); central edits quantities and `PUT /dispatch/:id` (transfer_out, FEFO, average cost) → in transit → shop `PUT /receive/:id { items: [{ _id, received_qty }] }` (transfer_in; less than sent → auto-posted `transfer_shortage` adjustment = loss at once; more than sent → 400).
+
+Stock count (blind) — `/stock/count` · SC-yymm-0001 · shop manager (own shops) or central counts, **admin / central posts**:
+
+| Method | Route | |
+|---|---|---|
+| `POST` | `/stock/count` | `{ warehouse_id, category_id?, note }` → every active SKU (batch SKUs: one line per batch in stock) · 409 if the warehouse has an open count |
+| `GET` | `/stock/count` · `/stock/count/:id` | list (no lines) `?state=&warehouse_id=&q=` · one with lines |
+| `PUT` | `/stock/count/:id` | while counting: `{ counts: [{ _id, counted_qty\|null, batch_no?, expiry_date?, note? }], add: [{ sku\|barcode\|variant_id, counted_qty, batch_no?, expiry_date? }] }` |
+| `PUT` | `/stock/count/submit/:id` | `{ uncounted: skip \| zero }` → system qty taken **now**, differences computed |
+| `PUT` | `/stock/count/reopen/:id` | central: back to counting |
+| `PUT` | `/stock/count/post/:id` | central: one **adjustment** (`reason: stock_count`, `count_id`) with the differences, posted at once; `diff_cost` stored |
+| `PUT` | `/stock/count/cancel/:id` | counting / submitted → cancelled |
+
+- Blind: `expected_qty` is empty while counting. Always in the base unit. Shop managers never get `unit_cost` / `diff_cost`.
+- `stock_count` adjustments can't be edited by hand (like `transfer_shortage`).
 
 Views (shop manager: own shops, **no cost fields**):
 
@@ -293,6 +325,73 @@ Bots from @BotFather → groups / chats (each linked to **one** bot) → event m
 - Messages go to a queue (`TelegramMessage`); a worker sends every 10 s and runs schedules every minute. Failures retry with back-off (30 s × 2ⁿ, 6 tries); 400 / 401 / 403 from Telegram fail at once. Saving a document never waits for Telegram.
 - Env (optional): `TELEGRAM_TOKEN_KEY` — key for the token encryption (falls back to `JWT_SECRET`; changing it means re-entering bot tokens) · `TELEGRAM_WORKER=off` — no worker (e.g. a second instance) · `TELEGRAM_API_BASE` — tests only.
 - Connect: @BotFather → `/newbot` → copy token → add bot in the web → add the bot to the Telegram group and send a message there (`/start@yourbot`) → **Find chats** → Add.
+
+## QR code / public catalog — `/catalog` (links: admin, central manager · page: no login)
+
+| Method | Route | |
+|---|---|---|
+| `GET` | `/catalog` | links `?q=&warehouse_id=` (token, status, views, last_viewed_at) |
+| `POST` | `/catalog` | `{ name, warehouse_id, category_id?, note }` → random 12-character `token` |
+| `PUT` | `/catalog/:id` | `{ name?, warehouse_id?, category_id?, status?, note? }` — `status: false` turns the link off |
+| `PUT` | `/catalog/new-token/:id` | new token: the old URL / printed QR stops at once |
+| `DELETE` | `/catalog/:id` | soft delete |
+| `GET` | `/catalog/public/:token` | **no login** (API key only) · `?q=&category_id=&only=in_stock&page=&limit=` (≤ 60) |
+
+Public answer: `{ company, store, link, categories [{ _id, name, count }], total_items, in_stock, items, pagination }`; each item `{ name, image, brand, category, unit, status, price_min, price_max, variants [{ code, options, price, status }] }`.
+- Stock is a **status only**: `in`, `low` (qty ≤ min stock), `out` (≤ 0); products that don't track stock are always `in`. Never qty, cost or barcode.
+- **All active items** are listed, in-stock first, out-of-stock last. Price = the shop's price, else the default (base unit); none = "ask for price".
+- Categories are the top categories (sub-categories roll up); a link with `category_id` shows only that branch.
+- The heavy part is cached **60 s per link** in the server (price is read fresh per page). A visit (page 1, no filter) adds 1 to `views`.
+- Off / deleted / unknown token → 404.
+
+## Notes — `/note` (every signed-in user)
+
+| Method | Route | |
+|---|---|---|
+| `GET` | `/note` | own notes, pinned first then newest · `?q=&pinned=true&page=&limit=` (≤ 200) · super admin: everyone's (`scope: "all"`, `?user_id=` one person) |
+| `GET` | `/note/owners` | super admin: people with notes + count |
+| `GET` | `/note/:id` | |
+| `POST` | `/note` | `{ title, body, color, pinned }` — always the caller's own note; title or body required, body ≤ 20,000 characters |
+| `PUT` | `/note/:id` | any of the same fields |
+| `DELETE` | `/note/:id` | soft delete |
+
+`color`: default · yellow · green · blue · pink · purple. Someone else's note → 404 (also for admins); only a super admin can read, edit or delete every note (the owner stays the same). Notes are private: nothing about them is written to the activity log.
+
+## Speed
+
+- `vercel.json` → `regions: ["sin1"]` (Singapore, same region as the Atlas cluster AP_SOUTHEAST_1).
+- Auth: API key + session + user are cached in memory (`src/util/auth_cache.js`, 30 s, cleared by User / Session model hooks) → protected requests make 0 extra DB calls.
+- Every response has `Server-Timing: app;dur=…, db;desc="N calls"`; requests > 500 ms are logged with their DB call count (`src/util/db_timing.js`).
+- `GET /dashboard/summary` — everything the dashboard home needs in one request.
+- `GET /health` (no key, no data) → `{ ok, db, ms }` — for an uptime service (e.g. cron-job.org every 5 min) so the free Vercel function stays warm.
+
+## Global search — `GET /search?q=&limit=5` (web roles)
+
+`{ products, skus, warehouses, documents, suppliers, categories, brands, users }` — at least 2 characters; all groups run in parallel. Same rules as each list: shop managers only their shops (warehouses, transfers either side, adjustments, opening), goods receive only central roles, users only admin. A barcode / exact SKU is sorted first.
+
+## Security
+
+- **Login limit** (`src/util/login_guard.js`): 8 wrong passwords per email or 30 per IP in 15 min → `429` "wait N minutes" (also for change-password). Counted in MongoDB, so it holds on every Vercel instance; a correct login clears the email's counter. Env: `LOGIN_MAX_FAILS`, `LOGIN_MAX_FAILS_IP`, `LOGIN_WINDOW_MIN`.
+- **CORS**: browsers may call the API only from `https://inventory-pos-kh.web.app`, `https://inventory-pos-kh.firebaseapp.com` and localhost. Another domain (custom domain, POS app …): `CORS_ORIGINS="https://a.com,https://b.com"`. Postman / server-to-server calls are not affected.
+- **Test data can't reach real data**: `npm run seed:sample` and `npm test` stop unless `MONGO_DB` contains uat / test / dev / sample / demo / staging (`scripts/lib/test_db_guard.js`).
+
+## Production setup (real shops)
+
+1. Use a **separate database**: on Vercel → Settings → Environment Variables set `MONGO_DB` to e.g. `inventory_pos_prod` (same Atlas cluster is fine). Keep `uat` for tests.
+2. Set a new `JWT_SECRET`, `API_AUTH_KEY`, `TELEGRAM_TOKEN_KEY` for production (different from UAT); the admin web's `REACT_APP_API_AUTH_KEY` must match `API_AUTH_KEY`.
+3. Once, from your computer with the production values in a separate env file: `npm run seed` (API key, first super admin, setting, payment methods). Never run `seed:sample` there (it refuses anyway).
+4. `CORS_ORIGINS` if the admin web gets a custom domain. Uptime check: cron-job.org → `/health` every 5 min.
+5. **Backups** (below).
+
+## Backup / restore
+
+- `npm run backup` → `backups/<db>/<date_time>/` (every collection as gzip Extended JSON + `manifest.json`), keeps the newest 14 (`BACKUP_KEEP`). Read-only. `backups/` is in `.gitignore`.
+- `npm run restore -- <folder> --to <database> --yes` → into an empty database (refuses if data exists); `--replace` empties the target collections first; `--only users,warehouses` for some collections.
+- **Nightly on GitHub**: `.github/workflows/backup.yml` runs at 02:00 Cambodia time and keeps each backup 30 days as a downloadable artifact. Add repository secrets `MONGO_USER`, `MONGO_PASS`, `MONGO_DB` (the production database). Keep the repository private.
+
+## Tests
+
+`npm test` runs every `tests/*.test.js` (≈ 420 checks in 20 files, ~7 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
 
 ## Sample data (UAT)
 

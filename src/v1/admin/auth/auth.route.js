@@ -3,6 +3,7 @@ const helper = require("../../../util/helper");
 const User = require("../user/user.model");
 const Session = require("../session/session.model");
 const { logActivity } = require("../../../util/log");
+const { waitSeconds, recordFail, clearFails, waitText } = require("../../../util/login_guard");
 const baseRoute = "auth";
 
 const route = (prop) => {
@@ -45,17 +46,27 @@ const route = (prop) => {
       const email = String(req.body.email).trim().toLowerCase();
       const password = String(req.body.password);
 
+      // 0. Too many wrong tries for this email / from this IP → wait (src/util/login_guard.js)
+      const wait = await waitSeconds(req, email);
+      if (wait > 0) {
+        res.set("Retry-After", String(wait));
+        return res.status(429).json({ success: false, message: waitText(wait), retry_after: wait });
+      }
+
       // 1. Find user (same message for wrong email or password)
       const user = await User.findOne({ email, deleted: false });
       if (!user) {
+        await recordFail(req, email);
         return res.status(401).json({ success: false, message: wrongLogin });
       }
 
       // 2. Check password using bcrypt
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
+        await recordFail(req, email);
         return res.status(401).json({ success: false, message: wrongLogin });
       }
+      await clearFails(email);
 
       // 3. Suspended account
       if (!user.status) {
@@ -172,8 +183,11 @@ const route = (prop) => {
         }
 
         const user = await User.findById(req.user._id);
+        const wait = await waitSeconds(req, user.email); // same limit as login (guessing the old password)
+        if (wait > 0) return res.status(429).json({ success: false, message: waitText(wait), retry_after: wait });
         const isMatch = await bcrypt.compare(String(old_password), user.password);
         if (!isMatch) {
+          await recordFail(req, user.email);
           return res.status(400).json({ success: false, message: wrongOldPassword });
         }
 

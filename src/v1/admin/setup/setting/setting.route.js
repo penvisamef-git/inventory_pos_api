@@ -4,7 +4,7 @@ const { pick } = require("../../../../util/helper");
 const { can_manage_setup, can_view_master } = require("../../../../util/permission");
 const baseRoute = "setup/setting";
 
-const { TAX_MODES } = SettingModel;
+const { TAX_MODES, UI_THEMES } = SettingModel;
 
 // Fields the client may change
 const EDITABLE = [
@@ -23,6 +23,7 @@ const EDITABLE = [
   "receipt_footer",
   "low_stock_default",
   "expiry_alert_days",
+  "ui_theme",
 ];
 const NUMBERS = ["khr_rounding", "tax_rate", "low_stock_default", "expiry_alert_days"];
 
@@ -50,6 +51,16 @@ const route = (prop) => {
     }
   });
 
+  // ===================================== THEME (no login needed: the login page uses it) ================================================
+  prop.app.get(`/${prop.main_route}/setup/theme`, prop.api_auth, async (req, res) => {
+    try {
+      const data = await SettingModel.getMain();
+      res.set("Cache-Control", "no-store").status(200).json({ success: true, data: { ui_theme: data?.ui_theme || "forest" } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: serverError, error: err.message });
+    }
+  });
+
   // ===================================== UPDATE ================================================
   prop.app.put(`${urlAPI}`, ...editGuard, async (req, res) => {
     try {
@@ -70,6 +81,9 @@ const route = (prop) => {
       }
       if (updateFields.tax_mode !== undefined && !TAX_MODES.includes(updateFields.tax_mode)) {
         return res.status(400).json({ success: false, message: taxModeInvalid });
+      }
+      if (updateFields.ui_theme !== undefined && !UI_THEMES.includes(updateFields.ui_theme)) {
+        return res.status(400).json({ success: false, message: `រចនាប័ទ្មមិនត្រឹមត្រូវ! (${UI_THEMES.join(" | ")})` });
       }
       if (updateFields.tax_rate !== undefined && updateFields.tax_rate > 100) {
         return res.status(400).json({ success: false, message: taxRateInvalid });
