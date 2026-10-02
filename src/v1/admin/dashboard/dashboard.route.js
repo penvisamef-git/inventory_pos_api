@@ -8,6 +8,7 @@ const OpeningModel = require("../stock/opening/opening.model");
 const { serverError } = require("../../../util/master_crud");
 const { can_view_master, ROLE_ADMIN } = require("../../../util/permission");
 const { warehouse_scope, scopeFilter } = require("../../../util/warehouse_scope");
+const { salesToday } = require("../sale/sale.summary");
 
 // GET /dashboard/summary → everything the dashboard home needs in ONE request (all queries run in parallel)
 //   { warehouses, users (admin only, else null), rate, methods, products, priced, opening }
@@ -17,7 +18,7 @@ const route = (prop) => {
   prop.app.get(`/${prop.main_route}/dashboard/summary`, ...guard, async (req, res) => {
     try {
       const isAdmin = req.user.is_super_admin || req.user.role === ROLE_ADMIN;
-      const [warehouses, users, rate, methods, products, priced, opening] = await Promise.all([
+      const [warehouses, users, rate, methods, products, priced, opening, sales] = await Promise.all([
         WarehouseModel.find({ deleted: false, status: true, ...scopeFilter(req, "_id") })
           .select("code name_kh name_en type address phone status")
           .sort({ type: 1, sort_order: 1, code: 1 })
@@ -28,8 +29,9 @@ const route = (prop) => {
         ProductModel.countDocuments({ deleted: false }),
         PriceModel.exists({ deleted: { $ne: true }, warehouse_id: null }),
         OpeningModel.countDocuments({ state: "posted" }),
+        salesToday(req.warehouse_ids, { withCost: req.warehouse_scope === "all" }), // today's POS sales (own shops for a shop role)
       ]);
-      res.status(200).json({ success: true, data: { warehouses, users, rate, methods, products, priced: !!priced, opening } });
+      res.status(200).json({ success: true, data: { warehouses, users, rate, methods, products, priced: !!priced, opening, sales } });
     } catch (err) {
       res.status(500).json({ success: false, message: serverError, error: err.message });
     }

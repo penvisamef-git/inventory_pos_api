@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { salesToday } = require("../sale/sale.summary");
 const bcrypt = require("bcrypt");
 const UserModel = require("../user/user.model");
 const WarehouseModel = require("../setup/warehouse/warehouse.model");
@@ -76,10 +77,12 @@ const route = (prop) => {
         UserModel.find({ warehouse_ids: wh._id, deleted: false }).select("firstname lastname role status pos_pin").lean(),
       ]);
       const allScope = !req.warehouse_ids;
+      const sales = wh.type === "shop" ? await salesToday([wh._id], { withCost: allScope }) : null;
       res.status(200).json({
         success: true,
         data: {
           warehouse: { _id: wh._id, code: wh.code, name_kh: wh.name_kh, name_en: wh.name_en, type: wh.type },
+          sales, // today (POS) — null for the central warehouse
           stock: {
             skus: inStock.length,
             qty: round(inStock.reduce((t, r) => t + r.qty, 0), 4),

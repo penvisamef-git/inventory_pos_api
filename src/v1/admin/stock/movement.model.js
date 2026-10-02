@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 const MOVE_TYPES = ["opening", "purchase_in", "transfer_out", "transfer_in", "sale_out", "refund_in", "adjust_in", "adjust_out"];
-const REF_TYPES = ["opening", "goods_receive", "transfer", "stock_adjustment", "invoice"];
+const REF_TYPES = ["opening", "goods_receive", "transfer", "stock_adjustment", "invoice", "refund"];
 
 // The stock ledger — APPEND-ONLY. Never edited or deleted; a mistake is fixed by a new document.
 // qty is signed and always in the product's base unit (+ in, − out).

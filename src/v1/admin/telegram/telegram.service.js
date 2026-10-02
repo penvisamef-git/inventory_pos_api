@@ -205,7 +205,53 @@ async function buildReport(code, warehouseIds, opts = {}) {
     adj.forEach((a) => add(`• ${a.doc_no} ${a.warehouse_id?.code}`));
   }
 
-  if (code === "daily_sales" || code === "attendance") add("\n⏳ នឹងមានបន្ទាប់ពីភ្ជាប់ POS (ដំណាក់កាលទី 3)", "\n⏳ Available once the POS is connected (Phase 3)");
+  // ---------- POS: today's sales / attendance (Phnom Penh day) ----------
+  if (code === "daily_sales" || code === "attendance") {
+    const { SaleModel, RefundModel, PosAttendanceModel } = require("../pos/pos.model");
+    const ymd = new Date(now.getTime() + 7 * 3600e3).toISOString().slice(0, 10);
+    const from = new Date(`${ymd}T00:00:00+07:00`);
+    const shops = whs.filter((w) => w.type !== "central");
+    const money = (v) => `$${Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (code === "daily_sales") {
+      const match = { warehouse_id: { $in: shops.map((w) => w._id) }, state: "paid", sold_at: { $gte: from, $lte: now } };
+      const [bySale, byRefund, byMethod, top] = await Promise.all([
+        SaleModel.aggregate([{ $match: match }, { $group: { _id: "$warehouse_id", count: { $sum: 1 }, total: { $sum: "$total" }, discount: { $sum: "$discount_total" } } }]),
+        RefundModel.aggregate([{ $match: { warehouse_id: match.warehouse_id, refunded_at: match.sold_at } }, { $group: { _id: "$warehouse_id", count: { $sum: 1 }, total: { $sum: "$total" } } }]),
+        SaleModel.aggregate([{ $match: match }, { $unwind: "$payments" }, { $group: { _id: { w: "$warehouse_id", m: "$payments.name_en" }, usd: { $sum: "$payments.amount_usd" } } }]),
+        SaleModel.aggregate([{ $match: match }, { $unwind: "$items" }, { $group: { _id: { w: "$warehouse_id", v: "$items.variant_id" }, name: { $first: "$items.name_kh" }, sku: { $first: "$items.sku" }, qty: { $sum: "$items.qty" }, total: { $sum: "$items.line_total" } } }, { $sort: { total: -1 } }]),
+      ]);
+      let all = 0;
+      let allNet = 0;
+      for (const w of shops) {
+        const s = bySale.find((x) => String(x._id) === String(w._id)) || { count: 0, total: 0, discount: 0 };
+        const r = byRefund.find((x) => String(x._id) === String(w._id)) || { count: 0, total: 0 };
+        all += s.total;
+        allNet += s.total - r.total;
+        add(`\n<b>${esc(w.code)}</b> ${esc(w.name_kh)}: <b>${money(s.total)}</b> · ${s.count} វិក្កយបត្រ`, `\n<b>${esc(w.code)}</b> ${esc(w.name_en || w.name_kh)}: <b>${money(s.total)}</b> · ${s.count} invoices`);
+        if (!s.count) continue;
+        add(`មធ្យម ${money(s.total / s.count)}${s.discount ? ` · បញ្ចុះ ${money(s.discount)}` : ""}${r.count ? ` · សង ${r.count} (−${money(r.total)}) · សុទ្ធ ${money(s.total - r.total)}` : ""}`,
+          `avg ${money(s.total / s.count)}${s.discount ? ` · discounts ${money(s.discount)}` : ""}${r.count ? ` · refunds ${r.count} (−${money(r.total)}) · net ${money(s.total - r.total)}` : ""}`);
+        const ms = byMethod.filter((x) => String(x._id.w) === String(w._id)).sort((a, b) => b.usd - a.usd);
+        if (ms.length) add(ms.map((m) => `${esc(m._id.m)} ${money(m.usd)}`).join(" · "));
+        top.filter((x) => String(x._id.w) === String(w._id)).slice(0, Math.min(limit, 5)).forEach((i) => add(`• ${esc(i.name || i.sku)} × ${i.qty} · ${money(i.total)}`));
+      }
+      if (shops.length > 1) add(`\nសរុប: <b>${money(all)}</b> · សុទ្ធ ${money(allNet)}`, `\nAll shops: <b>${money(all)}</b> · net ${money(allNet)}`);
+    } else {
+      const rows = await PosAttendanceModel.find({ warehouse_id: { $in: shops.map((w) => w._id) }, at: { $gte: from, $lte: now } }).sort({ at: 1 }).lean();
+      const hm = (d) => new Date(d).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+      for (const w of shops) {
+        const mine = rows.filter((r) => String(r.warehouse_id) === String(w._id));
+        add(`\n<b>${esc(w.code)}</b> ${esc(w.name_kh)}`, `\n<b>${esc(w.code)}</b> ${esc(w.name_en || w.name_kh)}`);
+        if (!mine.length) add("គ្មានអ្នកចូល POS ថ្ងៃនេះ", "Nobody logged in today");
+        const people = [...new Set(mine.map((r) => r.name))];
+        people.forEach((p) => {
+          const ins = mine.filter((r) => r.name === p && r.action === "login");
+          const outs = mine.filter((r) => r.name === p && r.action === "logout");
+          add(`• ${esc(p)}: ចូល ${ins.length ? hm(ins[0].at) : "-"} · ចេញ ${outs.length ? hm(outs[outs.length - 1].at) : "នៅធ្វើការ"}`, `• ${esc(p)}: in ${ins.length ? hm(ins[0].at) : "-"} · out ${outs.length ? hm(outs[outs.length - 1].at) : "still working"}`);
+        });
+      }
+    }
+  }
   return out;
 }
 
@@ -282,7 +328,21 @@ function startWorker() {
       busy = false;
     }
   };
+  // a POS that has not called the cloud for POS_OFFLINE_HOURS (default 2) during shop hours (8:00–21:00) → one alert
+  const offlineCheck = async () => {
+    const hour = Number(new Date().toLocaleString("en-GB", { timeZone: TZ, hour: "2-digit", hour12: false }));
+    if (hour < 8 || hour >= 21) return;
+    const { PosDeviceModel } = require("../pos/pos.model");
+    const hooks = require("./telegram.hooks");
+    const hours = Number(process.env.POS_OFFLINE_HOURS || 2);
+    const devs = await PosDeviceModel.find({ deleted: false, status: true, paired_at: { $ne: null }, offline_alerted_at: null, last_seen_at: { $lt: new Date(Date.now() - hours * 3600e3) } }).lean();
+    for (const d of devs) {
+      hooks.posOffline(d, Math.floor((Date.now() - new Date(d.last_seen_at)) / 3600e3));
+      await PosDeviceModel.updateOne({ _id: d._id }, { offline_alerted_at: new Date() });
+    }
+  };
   timers = [
+    setInterval(() => offlineCheck().catch((err) => console.error("telegram pos offline:", err.message)), 10 * 60000),
     setInterval(tick, 10000),
     setInterval(() => runSchedules().catch((err) => console.error("telegram schedule:", err.message)), 60000),
   ];

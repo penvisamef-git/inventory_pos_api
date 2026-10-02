@@ -62,6 +62,14 @@ const index = (prop) => {
   const catalogRoute = require("./catalog/catalog.route");
   catalogRoute(prop);
 
+  // ================= POS (devices, sync, sales) =================
+  const posRoute = require("./pos/pos.route");
+  posRoute(prop);
+
+  // ================= Sales (invoices, report, shifts from the POS) =================
+  const saleRoute = require("./sale/sale.route");
+  saleRoute(prop);
+
   // ================= Other: personal notes =================
   const noteRoute = require("./note/note.route");
   noteRoute(prop);

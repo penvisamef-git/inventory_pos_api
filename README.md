@@ -344,6 +344,38 @@ Public answer: `{ company, store, link, categories [{ _id, name, count }], total
 - The heavy part is cached **60 s per link** in the server (price is read fresh per page). A visit (page 1, no filter) adds 1 to `views`.
 - Off / deleted / unknown token → 404.
 
+## POS (Phase 3) — `/pos/*` (admin, central manager) · `/pos-device/*` (called by a POS)
+
+Each shop counter runs **local_pos_api** (local MongoDB, sells offline) + **local_pos** (screen). The cloud links each one with a pairing code and keeps the sales.
+
+| Method | Route | |
+|---|---|---|
+| `GET` | `/pos/device` | devices `?warehouse_id=` (paired, valid pair_code, last seen / pull / push, version) |
+| `POST` | `/pos/device` | `{ warehouse_id (a shop), name }` → code `PP01-P1` (invoice prefix) + 6-digit `pair_code` (30 min) |
+| `PUT` | `/pos/device/:id` | `{ name, status, note }` — `status: false` blocks its sync (403) |
+| `PUT` | `/pos/device/pair-code/:id` | new code; the old key stops at once |
+| `DELETE` | `/pos/device/:id` | |
+| `GET` | `/pos/sale` | invoices received `?warehouse_id=&device_id=&from=&to=&q=` |
+| `POST` | `/pos-device/pair` | API key + `{ code }` → `device_key` (`<id>.<secret>`, only a sha256 hash is kept) |
+| `GET` | `/pos-device/ping` · `/pos-device/pull` | header `x-device-key` · pull = the shop's data for selling offline (setting, rate, payment methods, staff of the shop with a POS PIN — hash only, categories, brands, products → variants → prices per sale unit (shop price else default), barcodes, shop stock). No cost. |
+| `POST` | `/pos-device/push` | `{ invoices: [...] }` (≤ 100) → `{ accepted, duplicate, failed }` |
+
+Push: idempotent by `uuid`; `invoice_no` must start with the device code; each invoice → `Sale` + `sale_out` movements from the shop (FEFO batches, the rest without batch, **negative allowed**), cost per line at the moving average (`ref_type: invoice`). Device keys are cached 60 s.
+
+## Sales — `/sale` (admin, central manager, accountant: all shops + cost / profit · shop manager: own shops, no cost · cashier: no)
+
+Invoices and cash shifts come from the POS (`/pos-device/push` with `invoices` and `shifts`). Filters on every list: `from`, `to` (YYYY-MM-DD, Phnom Penh day, default today, max 400 days), `warehouse_id`, `device_id`, `cashier_id`.
+
+| | | |
+|---|---|---|
+| `GET` | `/sale` | invoices, newest first (`method`, `q` = invoice no. / item code / cashier, `flag=discount\|override`, `page`, `limit`) + `summary` (count, total, average, discount, cost, profit) |
+| `GET` | `/sale/report` | `kpi` (with the same-length period before, to compare), `by_day`, `by_hour`, `by_weekday`, `by_shop`, `by_device`, `by_cashier`, `methods` (`net_usd` = after change), `categories`, `top_items` |
+| `GET` | `/sale/shift` | cash shifts (`state`, `flag=diff`) + `summary` (open, short, total difference) |
+| `GET` | `/sale/filters` | shops, POS, cashiers, payment methods for the filters; `cost` = may this user see cost |
+| `GET` | `/sale/:id` | one invoice (id or invoice no.): lines, payments, change, approvals, shift |
+
+Profit = sales − tax − cost (average cost when the cloud received the sale).
+
 ## Notes — `/note` (every signed-in user)
 
 | Method | Route | |
@@ -391,7 +423,7 @@ Public answer: `{ company, store, link, categories [{ _id, name, count }], total
 
 ## Tests
 
-`npm test` runs every `tests/*.test.js` (≈ 420 checks in 20 files, ~7 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
+`npm test` runs every `tests/*.test.js` (≈ 440 checks in 21 files, ~7 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
 
 ## Sample data (UAT)
 
@@ -412,6 +444,6 @@ Public answer: `{ company, store, link, categories [{ _id, name, count }], total
 | 1 | Master data: warehouse, users, setting, exchange rate, payment method, unit, category, attribute, brand, product + variant, price | ✅ |
 | 2 | Stock: movement ledger, opening stock, goods receive + batch, transfer, adjustment | ✅ |
 | 2+ | Shop portal API · Telegram (bots, chats, events, scheduled reports) | ✅ |
-| 3 | POS: device, sync pull / push, Local POS API | |
-| 4 | Sales in cloud, dashboard, reports | |
-| 5 | Purchase order, promotion, stock count, KHQR / ABA, commission | |
+| 3 | POS: device pairing, sync pull / push, Local POS API + screen (shift, sell, hold, discount / out-of-stock approval, receipt, customer display, own report, theme, unlink) | ✅ |
+| 4 | Sales in cloud (invoices, report, cash shifts) · shop portal Sales · QR catalog · notes · stock count | ✅ (left: void / refund, Telegram POS events, sales on the home dashboard) |
+| 5 | Purchase order, promotion, KHQR / ABA, commission | |

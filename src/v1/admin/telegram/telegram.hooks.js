@@ -1,6 +1,6 @@
 // Turn business actions into Telegram events. Every function is fire-and-forget (never throws, never awaited by callers).
 const WarehouseModel = require("../setup/warehouse/warehouse.model");
-const { notify, esc } = require("./telegram.service");
+const { notify, esc, timeText } = require("./telegram.service");
 
 const REASON = {
   damaged: ["ខូចខាត", "Damaged"], expired: ["ផុតកំណត់", "Expired"], lost: ["បាត់", "Lost"], found: ["រកឃើញ", "Found"], other: ["ផ្សេងៗ", "Other"], transfer_shortage: ["ខ្វះពេលផ្ទេរ", "Transfer shortage"],
@@ -23,6 +23,14 @@ const run = (fn) => {
 };
 
 const qtyOf = (items) => items.reduce((t, i) => t + Math.abs(i.base_qty || 0), 0);
+
+const khr = (v) => `${Math.round(Number(v || 0)).toLocaleString("en-US")}៛`;
+const payText = (payments = []) => payments.map((p) => `${p.name_en || p.code} ${p.currency === "KHR" ? khr(p.amount) : usd(p.amount)}`).join(" + ") || "-";
+const saleLines = (items, max = 6) => {
+  const rows = items.slice(0, max).map((i) => `• ${esc(i.name_kh || i.sku)} × ${i.qty} ${esc(i.unit_code || "")}`);
+  if (items.length > max) rows.push(`… +${items.length - max}`);
+  return rows.join("\n");
+};
 
 const hooks = {
   transferCreated: (doc, req) =>
@@ -58,6 +66,70 @@ const hooks = {
         });
       }
     }),
+
+  // ---------------- POS (sent by the POS with its push) ----------------
+  posLogin: (device, a) =>
+    run(async () =>
+      notify("pos_login", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: await codeOf(device.warehouse_id), name: a.name || "-", action: a.action === "login" ? "ចូល" : "ចេញពី", time: timeText(a.at), __en: { action: a.action === "login" ? "logged in to" : "logged out of" } },
+        ref: { type: "pos_attendance", id: a._id },
+        happened_at: a.at,
+      }),
+    ),
+
+  shiftOpened: (device, sh) =>
+    run(async () =>
+      notify("shift_open", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: await codeOf(device.warehouse_id), name: sh.opened_by_name || "-", shift_no: sh.shift_no, opening_cash: `${usd(sh.opening_usd)} + ${khr(sh.opening_khr)}` },
+        ref: { type: "pos_shift", id: sh._id },
+        happened_at: sh.opened_at,
+      }),
+    ),
+
+  shiftClosed: (device, sh) =>
+    run(async () => {
+      const r = sh.report || {};
+      const d = Number(r.diff_total_usd || 0);
+      const diff = Math.abs(d) < 0.005 ? "✅ $0.00" : `${d < 0 ? "🔻 −" : "🔺 +"}${usd(Math.abs(r.diff_usd || 0))} ${r.diff_khr ? `${r.diff_khr < 0 ? "−" : "+"}${khr(Math.abs(r.diff_khr))}` : ""}`.trim();
+      await notify("shift_close", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: await codeOf(device.warehouse_id), name: sh.closed_by_name || "-", shift_no: sh.shift_no, sales_total: usd(r.net_total ?? r.sales_total), invoice_count: r.invoice_count || 0, difference: diff },
+        ref: { type: "pos_shift", id: sh._id },
+        happened_at: sh.closed_at || new Date(),
+      });
+    }),
+
+  saleReceived: (device, sale) =>
+    run(async () => {
+      const flags = [sale.discount_total > 0 ? `\n🏷 −${usd(sale.discount_total)}${sale.discount_by_name ? ` (${esc(sale.discount_by_name)})` : ""}` : "", sale.stock_override_by_name ? `\n⚠️ out of stock · ${esc(sale.stock_override_by_name)}` : ""].join("");
+      await notify("pos_sale", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: await codeOf(device.warehouse_id), invoice_no: sale.invoice_no, total: usd(sale.total), payment: payText(sale.payments), name: sale.cashier_name || "-", __raw: { items: saleLines(sale.items), flags } },
+        ref: { type: "invoice", id: sale._id },
+        happened_at: sale.sold_at,
+      });
+    }),
+
+  refundReceived: (device, rf) =>
+    run(async () =>
+      notify("invoice_void", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: await codeOf(device.warehouse_id), kind: rf.kind === "void" ? "លុបចោល" : "សងប្រាក់", invoice_no: rf.invoice_no, total: `−${usd(rf.total)}`, name: rf.cashier_name || "-", approved_by: rf.approved_by_name || "-", reason: rf.reason || "-", __raw: { items: saleLines(rf.items) }, __en: { kind: rf.kind === "void" ? "VOID" : "Refund" } },
+        ref: { type: "refund", id: rf._id },
+        happened_at: rf.refunded_at,
+      }),
+    ),
+
+  posOffline: (device, hours) =>
+    run(async () =>
+      notify("pos_offline", {
+        warehouse_ids: [device.warehouse_id],
+        data: { warehouse: `${await codeOf(device.warehouse_id)} · ${device.code}`, hours },
+        ref: { type: "pos_device", id: device._id },
+      }),
+    ),
 
   // a shop manager saved a draft → central must approve
   adjustmentCreated: (doc, req) =>

@@ -39,7 +39,9 @@ const EVENTS = [
   { code: "shift_close", group: "pos", phase: 3, name_kh: "បិទវេន", name_en: "Shift closed",
     kh: "🔴 <b>{warehouse}</b> {name} បិទវេន {shift_no}\nលក់ {sales_total} · {invoice_count} វិក្កយបត្រ\nលម្អៀងសាច់ប្រាក់ {difference}", en: "🔴 <b>{warehouse}</b> {name} closed shift {shift_no}\nSales {sales_total} · {invoice_count} invoices\nCash difference {difference}" },
   { code: "invoice_void", group: "pos", phase: 3, name_kh: "លុប / ប្រគល់វិក្កយបត្រ", name_en: "Void / refund",
-    kh: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\nដោយ {name} · មូលហេតុ: {reason}", en: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\nby {name} · reason: {reason}" },
+    kh: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\n{items}\nដោយ {name} · អនុម័ត {approved_by}\nមូលហេតុ: {reason}", en: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\n{items}\nby {name} · approved by {approved_by}\nreason: {reason}" },
+  { code: "pos_sale", group: "pos", phase: 3, name_kh: "វិក្កយបត្រថ្មី (រាល់ការលក់)", name_en: "New sale (every invoice)",
+    kh: "🧾 <b>{warehouse}</b> {invoice_no} · <b>{total}</b>\n{items}\n{payment} · {name}{flags}", en: "🧾 <b>{warehouse}</b> {invoice_no} · <b>{total}</b>\n{items}\n{payment} · {name}{flags}" },
   { code: "pos_offline", group: "pos", phase: 3, name_kh: "POS មិនបាន Sync យូរ", name_en: "POS not synced", kh: "📡 <b>{warehouse}</b> POS មិនបាន Sync {hours} ម៉ោង", en: "📡 <b>{warehouse}</b> POS has not synced for {hours} h" },
 ];
 
