@@ -104,7 +104,6 @@ const route = (prop) => {
           expiring_items: expiring.slice(0, 6).map((e) => ({ sku: e.variant_id?.code, name_kh: e.variant_id?.name_kh, name_en: e.variant_id?.name_en, batch_no: e.batch_id?.batch_no, expiry_date: e.expiry_date, qty: e.qty, days_left: Math.ceil((new Date(e.expiry_date) - now) / 86400000) })),
           incoming_transfers: incoming.slice(0, 5).map((t) => ({ _id: t._id, doc_no: t.doc_no, from: t.warehouse_id?.code, lines: t.items.length, dispatched_at: t.dispatched_at })),
           requested_transfers: requested.slice(0, 5).map((t) => ({ _id: t._id, doc_no: t.doc_no, state: t.state, lines: t.items.length, created_date: t.created_date })),
-          sales: null, // Phase 3: today's sales, shifts, POS status
         },
       });
     } catch (err) {

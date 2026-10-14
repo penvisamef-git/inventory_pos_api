@@ -3,7 +3,19 @@ const imageSchema = require("../../../../util/image.schema");
 
 const TAX_MODES = ["none", "inclusive", "exclusive"];
 // Look of the admin web + shop portal for everyone (light / dark stays each user's choice)
-const UI_THEMES = ["forest", "ocean", "candy", "navy"];
+const UI_THEMES = [
+  "forest", "ocean", "candy", "navy",
+  // themes made from seeds (inventory_pos_admin/src/page/theme/themeSeeds.js)
+  "emerald", "lagoon", "olive", "jungle", "sky", "arctic", "indigo", "midnight", "royal", "lavender", "grape", "bubblegum", "rose", "wine", "coral", "cherry", "sunset", "honey", "mocha", "charcoal",
+];
+
+// POS receipt styles (inventory_pos_admin/src/page/cloudpos/receiptTemplates.js · local_pos/src/receiptTemplates.js)
+const RECEIPT_TEMPLATES = [
+  "classic", "typewriter", "minimal", "modern", "bold", "elegant",
+  "compact", "table", "large", "retro", "boxed", "numbered",
+  "barcode", "banner_table", "boutique", "playful", "mono_lite", "double_line",
+  "express", "executive", "clean_grid", "big_total", "dotted_box", "premium",
+];
 
 // One document only (key: "main") — company, receipt, tax and stock alert settings
 const settingSchema = new mongoose.Schema(
@@ -31,6 +43,7 @@ const settingSchema = new mongoose.Schema(
     // ---- Receipt ----
     receipt_header: { type: String, default: "" },
     receipt_footer: { type: String, default: "សូមអរគុណ!" },
+    receipt_template: { type: String, enum: RECEIPT_TEMPLATES, default: "classic" }, // POS receipt style (24)
 
     // ---- Stock alerts ----
     low_stock_default: { type: Number, default: 5, min: 0 },
@@ -63,5 +76,6 @@ SettingModel.getMain = async function () {
 };
 
 SettingModel.UI_THEMES = UI_THEMES;
+SettingModel.RECEIPT_TEMPLATES = RECEIPT_TEMPLATES;
 
 module.exports = SettingModel;

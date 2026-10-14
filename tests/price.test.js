@@ -50,23 +50,24 @@ const days = (n) => new Date(Date.now() + n * 86400000).toISOString();
     check("shop manager set price → 403", r.status === 403, r.status);
 
     // ---------- history chain ----------
-    r = await call("POST", "/product/price", central, { variant_id: vM, price: 13, effective_from: days(10) });
+    const D10 = days(10), D5 = days(5); // the dates sent (compare with these, not "now + n" later: slow networks)
+    r = await call("POST", "/product/price", central, { variant_id: vM, price: 13, effective_from: D10 });
     const p3 = r.json.data?._id;
     check("upcoming price (+10d) → 201 open-ended", r.status === 201 && r.json.data.effective_to === null, JSON.stringify(r.json).slice(0, 200));
     let p1doc = await Price.findById(p1);
-    check("current row closed at +10d", p1doc.effective_to && Math.abs(new Date(p1doc.effective_to) - new Date(days(10))) < 5000, String(p1doc.effective_to));
-    r = await call("POST", "/product/price", central, { variant_id: vM, price: 12.75, effective_from: days(5) });
+    check("current row closed at +10d", p1doc.effective_to && Math.abs(new Date(p1doc.effective_to) - new Date(D10)) < 5000, String(p1doc.effective_to));
+    r = await call("POST", "/product/price", central, { variant_id: vM, price: 12.75, effective_from: D5 });
     const p2 = r.json.data?._id;
-    check("insert between (+5d) → ends at +10d", r.status === 201 && Math.abs(new Date(r.json.data.effective_to) - new Date(days(10))) < 5000, JSON.stringify(r.json.data?.effective_to));
+    check("insert between (+5d) → ends at +10d", r.status === 201 && Math.abs(new Date(r.json.data.effective_to) - new Date(D10)) < 5000, JSON.stringify(r.json.data?.effective_to));
     p1doc = await Price.findById(p1);
-    check("current row now closed at +5d", Math.abs(new Date(p1doc.effective_to) - new Date(days(5))) < 5000, String(p1doc.effective_to));
+    check("current row now closed at +5d", Math.abs(new Date(p1doc.effective_to) - new Date(D5)) < 5000, String(p1doc.effective_to));
     r = await call("POST", "/product/price", central, { variant_id: vM, price: 99, effective_from: (await Price.findById(p2)).effective_from });
     check("same start time → 409", r.status === 409, r.status);
     r = await call("DELETE", "/product/price/" + p1, central);
     check("delete started price → 400", r.status === 400, r.json.message);
     r = await call("DELETE", "/product/price/" + p2, central);
     p1doc = await Price.findById(p1);
-    check("delete upcoming (+5d) → previous row extends to +10d", r.status === 200 && Math.abs(new Date(p1doc.effective_to) - new Date(days(10))) < 5000, String(p1doc.effective_to));
+    check("delete upcoming (+5d) → previous row extends to +10d", r.status === 200 && Math.abs(new Date(p1doc.effective_to) - new Date(D10)) < 5000, String(p1doc.effective_to));
     r = await call("GET", `/product/price?variant_id=${vM}&warehouse_id=default&sort=effective_from&order=asc`, central);
     check("history → 2 rows (current + upcoming) with state", r.json.data?.length === 2 && r.json.data[0].state === "current" && r.json.data[1].state === "upcoming", JSON.stringify(r.json.data?.map((x) => x.state)));
     const p3id = p3;

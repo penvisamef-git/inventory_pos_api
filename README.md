@@ -346,21 +346,29 @@ Public answer: `{ company, store, link, categories [{ _id, name, count }], total
 
 ## POS (Phase 3) — `/pos/*` (admin, central manager) · `/pos-device/*` (called by a POS)
 
-Each shop counter runs **local_pos_api** (local MongoDB, sells offline) + **local_pos** (screen). The cloud links each one with a pairing code and keeps the sales.
+Each shop counter runs **local_pos_api** (local MongoDB, sells offline) + **local_pos** (screen). The cloud links each one with a pairing code and keeps the sales. The **Cloud POS** in the admin web (`/cloud/pos`, IndexedDB in the browser) uses the same `/pos-device/*` calls — one device = one counter, local or cloud.
 
 | Method | Route | |
 |---|---|---|
 | `GET` | `/pos/device` | devices `?warehouse_id=` (paired, valid pair_code, last seen / pull / push, version) |
-| `POST` | `/pos/device` | `{ warehouse_id (a shop), name }` → code `PP01-P1` (invoice prefix) + 6-digit `pair_code` (30 min) |
+| `POST` | `/pos/device` | `{ warehouse_id (a shop), name, kind: local | cloud }` (admin buttons: Add local POS · Add cloud POS) → code `PP01-P1` (invoice prefix) + 6-digit `pair_code` (30 min) |
 | `PUT` | `/pos/device/:id` | `{ name, status, note }` — `status: false` blocks its sync (403) |
 | `PUT` | `/pos/device/pair-code/:id` | new code; the old key stops at once |
 | `DELETE` | `/pos/device/:id` | |
 | `GET` | `/pos/sale` | invoices received `?warehouse_id=&device_id=&from=&to=&q=` |
 | `POST` | `/pos-device/pair` | API key + `{ code }` → `device_key` (`<id>.<secret>`, only a sha256 hash is kept) |
-| `GET` | `/pos-device/ping` · `/pos-device/pull` | header `x-device-key` · pull = the shop's data for selling offline (setting, rate, payment methods, staff of the shop with a POS PIN — hash only, categories, brands, products → variants → prices per sale unit (shop price else default), barcodes, shop stock). No cost. |
-| `POST` | `/pos-device/push` | `{ invoices: [...] }` (≤ 100) → `{ accepted, duplicate, failed }` |
+| `GET` | `/pos-device/ping` · `/pos-device/pull` | header `x-device-key` · pull = `setting` (incl. `receipt_template`, `ui_theme`), `device` (+ `last_invoice_no`, `last_refund_no`, `last_shift_no` so a cleared POS continues the numbers), the shop's data for selling offline (setting, rate, payment methods (+ `qr_image` when *Show a QR* is on), staff of the shop with a POS PIN — hash only, categories, brands, products → variants → prices per sale unit (shop price else default), barcodes, shop stock). No cost. |
+| `POST` | `/pos-device/push` | `{ invoices, refunds, shifts, events }` → `{ accepted, duplicate, failed, refunds: { accepted, duplicate, failed }, shifts: { saved, failed }, events: { saved } }` |
 
-Push: idempotent by `uuid`; `invoice_no` must start with the device code; each invoice → `Sale` + `sale_out` movements from the shop (FEFO batches, the rest without batch, **negative allowed**), cost per line at the moving average (`ref_type: invoice`). Device keys are cached 60 s.
+Push (every part optional, idempotent by `uuid` / device + `shift_no`):
+- **invoices** (≤ 100): `invoice_no` must start with the device code → `Sale` + `sale_out` movements from the shop (FEFO batches, the rest without batch, **negative allowed**), cost per line at the moving average (`ref_type: invoice`).
+- **refunds** (≤ 100, refund / void): `{ uuid, refund_no, sale_uuid, invoice_no, kind, items: [{ index, variant_id, qty, amount }], total, payments, reason, approved_by_name … }` → `SaleRefund` + `refund_in` movements back into the **same batches** the sale took, at the **cost of the sale** (`ref_type: refund`); the invoice gets `items[].refunded_qty`, `refunded_total`, `refund_status` (partial / full). Never more than sold; an invoice not in the cloud yet → failed, the POS retries.
+- **shifts** (≤ 50): cash drawer shift, sent when opened and again when closed.
+- **events** (≤ 200): `{ uuid, action: login|logout, user_id, name, at }` → `PosAttendance`.
+
+A refused device key says why: `code: DEVICE_UNPAIRED` (deleted / new pairing code) or `DEVICE_OFF` (turned off) → the POS clears its data. Device keys are cached 60 s.
+
+Telegram (POS events — tick them per chat): `pos_login` (login / logout), `shift_open`, `shift_close` (with the cash difference), `invoice_void` (void / refund), `pos_sale` (every invoice — off by default), `pos_offline` (no call for `POS_OFFLINE_HOURS`, default 2, during 8:00–21:00, once). Reports: `daily_sales` (per shop: sales, refunds, net, payments, top items), `attendance` (first login / last logout per person).
 
 ## Sales — `/sale` (admin, central manager, accountant: all shops + cost / profit · shop manager: own shops, no cost · cashier: no)
 
@@ -368,13 +376,15 @@ Invoices and cash shifts come from the POS (`/pos-device/push` with `invoices` a
 
 | | | |
 |---|---|---|
-| `GET` | `/sale` | invoices, newest first (`method`, `q` = invoice no. / item code / cashier, `flag=discount\|override`, `page`, `limit`) + `summary` (count, total, average, discount, cost, profit) |
+| `GET` | `/sale` | invoices, newest first (`method`, `q` = invoice no. / item code / cashier, `flag=discount\|override\|refunded`, `page`, `limit`) + `summary` (count, total, average, discount, cost, profit) |
 | `GET` | `/sale/report` | `kpi` (with the same-length period before, to compare), `by_day`, `by_hour`, `by_weekday`, `by_shop`, `by_device`, `by_cashier`, `methods` (`net_usd` = after change), `categories`, `top_items` |
 | `GET` | `/sale/shift` | cash shifts (`state`, `flag=diff`) + `summary` (open, short, total difference) |
 | `GET` | `/sale/filters` | shops, POS, cashiers, payment methods for the filters; `cost` = may this user see cost |
-| `GET` | `/sale/:id` | one invoice (id or invoice no.): lines, payments, change, approvals, shift |
+| `GET` | `/sale/:id` | one invoice (id or invoice no.): lines (`refunded_qty`), payments, change, approvals, shift, `refunds` |
 
-Profit = sales − tax − cost (average cost when the cloud received the sale).
+Profit = sales − tax − cost (average cost when the cloud received the sale). Refunds count on the day of the refund: `kpi.refund_total`, `refund_count`, `void_count`, `net_total` = sales − refunds; profit loses (refund − cost of the goods back).
+
+Dashboards: `GET /dashboard/summary` and `GET /shop/summary` also return `sales` (today): total, invoices, average, refunds, net, yesterday until the same time, last 7 days, top 5 items, POS online / open shifts (+ `profit` for central roles).
 
 ## Notes — `/note` (every signed-in user)
 
@@ -445,5 +455,5 @@ Profit = sales − tax − cost (average cost when the cloud received the sale).
 | 2 | Stock: movement ledger, opening stock, goods receive + batch, transfer, adjustment | ✅ |
 | 2+ | Shop portal API · Telegram (bots, chats, events, scheduled reports) | ✅ |
 | 3 | POS: device pairing, sync pull / push, Local POS API + screen (shift, sell, hold, discount / out-of-stock approval, receipt, customer display, own report, theme, unlink) | ✅ |
-| 4 | Sales in cloud (invoices, report, cash shifts) · shop portal Sales · QR catalog · notes · stock count | ✅ (left: void / refund, Telegram POS events, sales on the home dashboard) |
+| 4 | Sales in cloud (invoices, report, cash shifts) · shop portal Sales · QR catalog · notes · stock count · void / refund · Telegram POS events + reports · sales on the dashboards | ✅ |
 | 5 | Purchase order, promotion, KHQR / ABA, commission | |

@@ -65,6 +65,12 @@ const clearKeyCache = () => keyCache.clear();
 // ---------------- what a POS needs to sell offline (one shop) ----------------
 async function snapshot(device) {
   const wh = await WarehouseModel.findById(device.warehouse_id).lean();
+  // the last numbers this POS used (a browser POS whose storage was cleared continues after them)
+  const [lastSale, lastRefund, lastShift] = await Promise.all([
+    SaleModel.findOne({ device_id: device._id }).sort({ sold_at: -1, _id: -1 }).select("invoice_no").lean(),
+    RefundModel.findOne({ device_id: device._id }).sort({ refunded_at: -1, _id: -1 }).select("refund_no").lean(),
+    PosShiftModel.findOne({ device_id: device._id }).sort({ opened_at: -1, _id: -1 }).select("shift_no").lean(),
+  ]);
   const [setting, rate, methods, users, categories, brands, products] = await Promise.all([
     SettingModel.getMain(),
     ExchangeRateModel.currentAt(new Date()),
@@ -144,7 +150,7 @@ async function snapshot(device) {
 
   return {
     server_time: new Date(),
-    device: { _id: device._id, name: device.name, code: device.code },
+    device: { _id: device._id, name: device.name, code: device.code, last_invoice_no: lastSale?.invoice_no || null, last_refund_no: lastRefund?.refund_no || null, last_shift_no: lastShift?.shift_no || null },
     warehouse: { _id: wh._id, code: wh.code, name_kh: wh.name_kh, name_en: wh.name_en || wh.name_kh, type: wh.type, address: wh.address || "", phone: wh.phone || "" },
     setting: {
       company_name_kh: setting?.company_name_kh || "",
@@ -160,10 +166,11 @@ async function snapshot(device) {
       tax_name: setting?.tax_name || "VAT",
       receipt_header: setting?.receipt_header || "",
       receipt_footer: setting?.receipt_footer || "",
+      receipt_template: setting?.receipt_template || "classic", // admin → receipt style (24)
       ui_theme: setting?.ui_theme || "forest", // admin → General settings → System theme
     },
     rate: rate ? { rate: rate.rate, effective_from: rate.effective_from } : null,
-    payment_methods: methods.map((m) => ({ _id: m._id, code: m.code, name_kh: m.name_kh, name_en: m.name_en || m.name_kh, type: m.type, currency: m.currency, requires_reference: !!m.requires_reference, icon: m.icon?.url || null })),
+    payment_methods: methods.map((m) => ({ _id: m._id, code: m.code, name_kh: m.name_kh, name_en: m.name_en || m.name_kh, type: m.type, currency: m.currency, requires_reference: !!m.requires_reference, icon: m.icon?.url || null, qr_image: (m.qr_enabled && m.qr_image?.url) || null })),
     users: users.map((u) => ({ _id: u._id, firstname: u.firstname, lastname: u.lastname, email: u.email, role: u.role, is_manager: u.role === ROLES.SHOP_MANAGER.value, pin_hash: u.pos_pin })),
     categories: categories.map((c) => ({ _id: c._id, code: c.code, name_kh: c.name_kh, name_en: c.name_en || c.name_kh, parent_id: c.parent_id || null, image: c.image?.url || null })),
     brands: brands.map((b) => ({ _id: b._id, code: b.code, name_kh: b.name_kh, name_en: b.name_en || b.name_kh })),
@@ -475,7 +482,7 @@ const route = (prop) => {
     ok(res, data);
   }));
 
-  // { warehouse_id (a shop), name } → new device with a pairing code (valid 30 min)
+  // { warehouse_id (a shop), name, kind: local | cloud } → new device with a pairing code (valid 30 min)
   prop.app.post(base, ...guard, wrap(async (req, res) => {
     const b = req.body || {};
     const wh = isId(b.warehouse_id) ? await WarehouseModel.findOne({ _id: b.warehouse_id, deleted: false }).lean() : null;
@@ -488,6 +495,7 @@ const route = (prop) => {
     for (let k = n + 1; await PosDeviceModel.exists({ code }); k++) code = `${wh.code}-P${k}`;
     const doc = await PosDeviceModel.create({
       name,
+      kind: b.kind === "cloud" ? "cloud" : "local",
       code,
       warehouse_id: wh._id,
       pair_code: newPairCode(),

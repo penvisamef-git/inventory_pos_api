@@ -4,7 +4,7 @@ const { pick } = require("../../../../util/helper");
 const { can_manage_setup, can_view_master } = require("../../../../util/permission");
 const baseRoute = "setup/setting";
 
-const { TAX_MODES, UI_THEMES } = SettingModel;
+const { TAX_MODES, UI_THEMES, RECEIPT_TEMPLATES } = SettingModel;
 
 // Fields the client may change
 const EDITABLE = [
@@ -21,6 +21,7 @@ const EDITABLE = [
   "tax_name",
   "receipt_header",
   "receipt_footer",
+  "receipt_template",
   "low_stock_default",
   "expiry_alert_days",
   "ui_theme",
@@ -81,6 +82,9 @@ const route = (prop) => {
       }
       if (updateFields.tax_mode !== undefined && !TAX_MODES.includes(updateFields.tax_mode)) {
         return res.status(400).json({ success: false, message: taxModeInvalid });
+      }
+      if (updateFields.receipt_template !== undefined && !RECEIPT_TEMPLATES.includes(updateFields.receipt_template)) {
+        return res.status(400).json({ success: false, message: `ទម្រង់វិក្កយបត្រមិនត្រឹមត្រូវ! / Unknown receipt style (${RECEIPT_TEMPLATES.join(" | ")})` });
       }
       if (updateFields.ui_theme !== undefined && !UI_THEMES.includes(updateFields.ui_theme)) {
         return res.status(400).json({ success: false, message: `រចនាប័ទ្មមិនត្រឹមត្រូវ! (${UI_THEMES.join(" | ")})` });

@@ -47,7 +47,7 @@ const days = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 1
     check("POS only for a shop (400)", r.status === 400, r.status);
     r = await call("POST", "/pos/device", central.t, { warehouse_id: S1, name: "Counter 1" });
     const DID = r.json.data?._id; let code = r.json.data?.pair_code;
-    check("central adds a POS → code ZZP1-P1 + 6-digit pairing code", r.status === 201 && r.json.data.code === "ZZP1-P1" && /^\d{6}$/.test(code), JSON.stringify(r.json).slice(0, 200));
+    check("central adds a POS → code ZZP1-P1 + 6-digit pairing code", r.status === 201 && r.json.data.code === "ZZP1-P1" && r.json.data.kind === "local" && /^\d{6}$/.test(code), JSON.stringify(r.json).slice(0, 200));
     r = await call("GET", "/pos/device?warehouse_id=" + S1, central.t);
     check("list shows it waiting for pairing", r.json.data?.[0]?.pair_code_valid === true && !r.json.data[0].paired && r.json.data[0].key_hash === undefined);
 
@@ -108,6 +108,8 @@ const days = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 1
     check("push: invoice + open shift", r.json.data?.accepted.length === 1 && r.json.data.shifts.saved.length === 1, JSON.stringify(r.json.data));
     r = await call("POST", "/pos-device/push", null, { invoices: [], shifts: [{ ...sh, state: "closed", closed_by_name: "T U", closed_at: new Date().toISOString(), counted_usd: 20, counted_khr: 39000, report: { invoice_count: 1, sales_total: 4, expected_usd: 20, expected_khr: 40000, diff_usd: 0, diff_khr: -1000, diff_total_usd: -0.24 } }, { ...sh, shift_no: "OTHER-S1" }] }, D);
     check("push the closing again → same row closed; wrong prefix refused", r.json.data.shifts.saved.length === 1 && r.json.data.shifts.failed.length === 1 && (await PosShift.countDocuments({ device_id: DID })) === 1 && (await PosShift.findOne({ device_id: DID })).state === "closed");
+    r = await call("GET", "/pos-device/pull", null, null, D);
+    check("pull: last numbers this POS used (a new browser / cleared POS continues after them)", r.json.data.device.last_invoice_no === I4.invoice_no && r.json.data.device.last_shift_no === sh.shift_no, JSON.stringify(r.json.data.device));
     check("sale keeps who approved + change split", (await Sale.findOne({ uuid: I4.uuid })).discount_by_name === "ZZ Manager" && (await Sale.findOne({ uuid: I4.uuid })).change_give_khr === 4100);
 
     r = await call("GET", "/sale?warehouse_id=" + S1, central.t);
@@ -178,12 +180,13 @@ const days = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 1
 
     // ---------- dashboards: today's sales ----------
     r = await call("GET", "/shop/summary?warehouse_id=" + S1, shop.t);
-    const sd = r.json.data?.sales; if (!sd) console.log("DBG", JSON.stringify(r.json).slice(0, 400));
+    const sd = r.json.data?.sales;
     check("shop portal: today 2 invoices $113, refunds $80, net $33, POS online, no profit for a shop manager", r.status === 200 && sd.today.count === 2 && sd.today.total === 113 && sd.today.refund_total === 80 && sd.today.net_total === 33 && sd.pos.devices === 1 && sd.pos.online === 1 && sd.today.profit === undefined && sd.days.length === 7 && sd.top_items.length >= 1, JSON.stringify(sd).slice(0, 300));
     r = await call("GET", "/shop/summary?warehouse_id=" + S1, central.t);
     check("central sees the profit of today", typeof r.json.data.sales.today.profit === "number", JSON.stringify(r.json.data.sales.today));
     r = await call("GET", "/dashboard/summary", central.t);
     check("admin home: sales block (all shops)", r.status === 200 && r.json.data.sales.today.count >= 2 && r.json.data.sales.days.length === 7, JSON.stringify(r.json.data.sales?.today));
+    check("admin home: stock alerts (milk below zero in the test shop)", r.json.data.alerts && r.json.data.alerts.negative >= 1 && r.json.data.alerts.out >= 1 && Array.isArray(r.json.data.alerts.low_items) && typeof r.json.data.alerts.transfers_to_receive === "number", JSON.stringify(r.json.data.alerts).slice(0, 300));
 
     // ---------- off / new code ----------
     await call("PUT", "/pos/device/" + DID, central.t, { status: false });

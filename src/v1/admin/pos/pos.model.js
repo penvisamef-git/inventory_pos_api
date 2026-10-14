@@ -9,6 +9,7 @@ const oid = (ref) => ({ type: mongoose.Schema.Types.ObjectId, ref, default: null
 const deviceSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true }, // "Counter 1"
+    kind: { type: String, enum: ["local", "cloud"], default: "local" }, // local = POS computer (local_pos) · cloud = Cloud POS in a browser (/cloud/pos)
     code: { type: String, required: true, trim: true, uppercase: true }, // PP01-P1 → invoice prefix
     warehouse_id: { ...oid("Warehouse"), required: true }, // a shop
     pair_code: { type: String, default: null }, // 6 digits while waiting to be paired

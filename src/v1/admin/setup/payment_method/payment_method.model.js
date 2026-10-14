@@ -15,6 +15,8 @@ const paymentMethodSchema = new mongoose.Schema(
     requires_reference: { type: Boolean, default: false }, // cashier must type a reference no. (offline QR)
     online_mode: { type: Boolean, default: false }, // dynamic QR with amount when the POS is online
     icon: { type: imageSchema, default: null },
+    qr_enabled: { type: Boolean, default: false }, // show a fixed QR (shop's KHQR / ABA) on the customer display
+    qr_image: { type: imageSchema, default: null }, // the uploaded QR picture
     sort_order: { type: Number, default: 0 },
 
     // >>>>>> Default <<<<< //

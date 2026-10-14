@@ -57,8 +57,9 @@ const route = (prop) => {
         return res.status(409).json({ success: false, message: existsText });
       }
 
-      const { name_kh, name_en, type, currency, requires_reference, online_mode, icon, sort_order, note, status } =
+      const { name_kh, name_en, type, currency, requires_reference, online_mode, icon, qr_enabled, qr_image, sort_order, note, status } =
         req.body;
+      if (qr_enabled && !qr_image?.url) return res.status(400).json({ success: false, message: "សូមបញ្ចូលរូប QR! / Upload the QR picture" });
       const saveData = await PaymentMethodModel.create({
         code,
         name_kh,
@@ -68,6 +69,8 @@ const route = (prop) => {
         requires_reference: !!requires_reference,
         online_mode: !!online_mode,
         icon: icon || null,
+        qr_enabled: !!qr_enabled,
+        qr_image: qr_image || null,
         sort_order: Number(sort_order) || 0,
         note,
         status,
@@ -147,8 +150,15 @@ const route = (prop) => {
 
       const body = sanitizeUpdate(req.body, ["sort_order"]);
       const clearIcon = body.icon === null;
+      const clearQr = body.qr_image === null;
       const updateFields = removeEmpty({ ...body, updated_by: userId });
       if (clearIcon) updateFields.icon = null;
+      if (clearQr) updateFields.qr_image = null;
+      if (updateFields.qr_enabled !== undefined) updateFields.qr_enabled = !!updateFields.qr_enabled;
+      if (updateFields.qr_enabled) {
+        const cur = await PaymentMethodModel.findById(id).select("qr_image").lean();
+        if (!(updateFields.qr_image?.url || (!clearQr && cur?.qr_image?.url))) return res.status(400).json({ success: false, message: "សូមបញ្ចូលរូប QR! / Upload the QR picture" });
+      }
 
       if (Object.keys(updateFields).length === 1) {
         return res.status(400).json({ success: false, message: noDataUpdate });

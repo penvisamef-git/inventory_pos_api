@@ -121,6 +121,21 @@ const route = (prop) => {
       if (WAREHOUSE_TYPES.includes(req.query.type)) extra.push({ type: req.query.type });
 
       const result = await getFilteredMongoDB(req.query, WarehouseModel, populate, extra);
+      // stock in each warehouse of the page: items with stock, total qty, below zero (cards + delete check)
+      const { StockBalanceModel } = require("../../stock/balance.model");
+      const ids = (result.data || []).map((w) => w._id);
+      const agg = ids.length
+        ? await StockBalanceModel.aggregate([
+            { $match: { warehouse_id: { $in: ids }, qty: { $ne: 0 } } },
+            { $group: { _id: "$warehouse_id", skus: { $sum: { $cond: [{ $gt: ["$qty", 0] }, 1, 0] } }, qty: { $sum: { $cond: [{ $gt: ["$qty", 0] }, "$qty", 0] } }, negative: { $sum: { $cond: [{ $lt: ["$qty", 0] }, 1, 0] } } } },
+          ])
+        : [];
+      const byId = new Map(agg.map((a) => [String(a._id), a]));
+      result.data = (result.data || []).map((w) => {
+        const o = typeof w.toJSON === "function" ? w.toJSON() : w;
+        const a = byId.get(String(o._id));
+        return { ...o, stock: { skus: a?.skus || 0, qty: Math.round((a?.qty || 0) * 10000) / 10000, negative: a?.negative || 0 } };
+      });
       res.status(200).json({
         success: true,
         data: result.data,
@@ -261,7 +276,26 @@ const route = (prop) => {
         return res.status(400).json({ success: false, message: noIDFound });
       }
 
-      // ✅ Blocked while users are linked or it has stock history (TODO Phase 3: POS device)
+      // ✅ Blocked while it still holds stock, has POS devices / users linked, or has stock history
+      const { StockBalanceModel } = require("../../stock/balance.model");
+      const [inStock, belowZero] = await Promise.all([
+        StockBalanceModel.find({ warehouse_id: id, qty: { $gt: 0 } }).select("qty").lean(),
+        StockBalanceModel.countDocuments({ warehouse_id: id, qty: { $lt: 0 } }),
+      ]);
+      if (inStock.length || belowZero) {
+        const qty = Math.round(inStock.reduce((t, b) => t + b.qty, 0) * 10000) / 10000;
+        return res.status(400).json({
+          success: false,
+          code: "HAS_STOCK",
+          message: inStock.length
+            ? `មិនអាចលុប${document}បានទេ ព្រោះនៅមានទំនិញ ${inStock.length} មុខ (${qty}) ក្នុងស្តុក! សូមផ្ទេរ ឬកែស្តុកឱ្យនៅ 0 សិន។ / Cannot delete: ${inStock.length} items (${qty} qty) are still in stock — transfer or adjust them to 0 first.`
+            : `មិនអាចលុប${document}បានទេ ព្រោះមានទំនិញ ${belowZero} មុខស្តុកក្រោម 0! / Cannot delete: ${belowZero} items are below zero — adjust them first.`,
+        });
+      }
+      const { PosDeviceModel } = require("../../pos/pos.model");
+      if (await PosDeviceModel.exists({ warehouse_id: id, deleted: false })) {
+        return res.status(400).json({ success: false, code: "HAS_POS", message: `មិនអាចលុប${document}បានទេ ព្រោះនៅមាន POS ភ្ជាប់! សូមលុប POS សិន។ / Cannot delete: it still has POS devices — delete them first.` });
+      }
       const hasUsers = await UserModel.exists({ warehouse_ids: id, deleted: false });
       if (hasUsers) {
         return res.status(400).json({ success: false, message: usedByUsers });

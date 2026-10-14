@@ -9,6 +9,7 @@ const Session = require(API + "/src/v1/admin/session/session.model");
 const Warehouse = require(API + "/src/v1/admin/setup/warehouse/warehouse.model");
 const ActivityLog = require(API + "/src/v1/admin/activity_log/activity_log.model");
 const { ROLES } = require(API + "/src/util/user_roles");
+const { StockBalanceModel: Bal } = require(API + "/src/v1/admin/stock/balance.model");
 
 const PASS = "TestPass#2026";
 const results = [];
@@ -90,6 +91,15 @@ const check = (name, cond, info = "") => { results.push(cond); console.log(`${co
 
     r = await call("DELETE", "/setup/warehouse/" + w2, admin.token);
     check("delete shop with linked users → 400", r.status === 400, r.json.message);
+    // stock still inside → cannot delete (balance row only, no history)
+    const fakeVariant = new mongoose.Types.ObjectId();
+    await Bal.create({ warehouse_id: w1, variant_id: fakeVariant, product_id: new mongoose.Types.ObjectId(), qty: 7, avg_cost: 1, total_value: 7 });
+    r = await call("GET", "/setup/warehouse?limit=100&type=central", admin.token);
+    const row = (r.json.data || []).find((w) => String(w._id) === String(w1));
+    check("list shows the stock inside (1 item, 7)", row && row.stock && row.stock.skus === 1 && row.stock.qty === 7, JSON.stringify(row?.stock));
+    r = await call("DELETE", "/setup/warehouse/" + w1, admin.token);
+    check("delete a warehouse that still has stock → 400 HAS_STOCK", r.status === 400 && r.json.code === "HAS_STOCK", JSON.stringify(r.json));
+    await Bal.deleteMany({ warehouse_id: w1 });
     r = await call("DELETE", "/setup/warehouse/" + w1, admin.token);
     check("delete central → 200", r.status === 200, r.json.message);
     r = await call("GET", "/setup/warehouse/" + w1, admin.token);
@@ -103,6 +113,8 @@ const check = (name, cond, info = "") => { results.push(cond); console.log(`${co
     console.error("ERROR", e);
     results.push(false);
   } finally {
+    const zz = (await Warehouse.find({ code: /^ZZT/ }).select("_id").lean()).map((w) => w._id);
+    await Bal.deleteMany({ warehouse_id: { $in: zz } });
     await Warehouse.deleteMany({ code: /^ZZT/ });
     await Session.deleteMany({ user_id: { $in: ids } });
     await ActivityLog.deleteMany({ create_by_id: { $in: ids } });
