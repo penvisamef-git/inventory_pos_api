@@ -9,6 +9,10 @@ const apiBase = () => process.env.TELEGRAM_API_BASE || "https://api.telegram.org
 
 // ---------------- Telegram Bot API ----------------
 // → result | throws Error(description)
+// Tests / sample data (TELEGRAM_SANDBOX, set by scripts/lib/test_db_guard): only test chats ("ZZ…") — never the real groups
+const sandbox = () => process.env.TELEGRAM_SANDBOX === "1";
+const sandboxChats = () => (sandbox() ? { title: /^ZZ/ } : {});
+
 async function tgCall(token, method, params = {}) {
   const res = await fetch(`${apiBase()}/bot${token}/${method}`, {
     method: "POST",
@@ -68,7 +72,7 @@ const timeText = (d = new Date()) =>
 async function notify(code, { warehouse_ids = [], data = {}, ref = null, happened_at = new Date() } = {}) {
   try {
     const whIds = warehouse_ids.filter(Boolean).map(String);
-    const chats = await TelegramChatModel.find({ deleted: false, status: true, event_codes: code }).lean();
+    const chats = await TelegramChatModel.find({ deleted: false, status: true, event_codes: code, ...sandboxChats() }).lean();
     const matching = chats.filter((c) => !c.warehouse_ids?.length || !whIds.length || c.warehouse_ids.some((w) => whIds.includes(String(w))));
     if (!matching.length) return 0;
     const activeBots = new Set((await TelegramBotModel.find({ _id: { $in: matching.map((c) => c.bot_id) }, deleted: false, status: true }).select("_id").lean()).map((b) => String(b._id)));
@@ -100,7 +104,9 @@ async function notify(code, { warehouse_ids = [], data = {}, ref = null, happene
 // ---------------- sender (worker) ----------------
 // Send due messages (oldest first). Failure → retry with back-off (30s, 1m, 2m, 4m …), max 6 tries; 400/403 → failed at once.
 async function sendPending(limit = 20) {
-  const due = await TelegramMessageModel.find({ state: "pending", next_try_at: { $lte: new Date() } }).sort({ created_date: 1 }).limit(limit);
+  const q = { state: "pending", next_try_at: { $lte: new Date() } };
+  if (sandbox()) q.chat_ref = { $in: (await TelegramChatModel.find(sandboxChats()).select("_id").lean()).map((c) => c._id) };
+  const due = await TelegramMessageModel.find(q).sort({ created_date: 1 }).limit(limit);
   let sent = 0;
   const tokens = new Map();
   for (const m of due) {
@@ -161,9 +167,13 @@ async function buildReport(code, warehouseIds, opts = {}) {
       const rows = variants.map((v) => ({ sku: v.code, kh: v.name_kh, en: v.name_en || v.name_kh, qty: bals.get(String(v._id)) || 0, min: v.min_stock ?? pMin.get(String(v.product_id)) ?? 0, carried: bals.has(String(v._id)) }));
       const low = rows.filter((r) => r.carried && r.min > 0 && r.qty <= r.min).sort((a, b) => a.qty / a.min - b.qty / b.min);
       if (code === "stock_summary") {
+        // in stock (qty > 0) · low (1 … min) · out (0 or less, still carried here)
         const inStock = rows.filter((r) => r.qty > 0);
-        add(`\n<b>${esc(w.code)}</b> ${esc(w.name_kh)}: ${inStock.length} មុខ · ${inStock.reduce((t2, r) => t2 + r.qty, 0)} ឯកតា · ស្តុកទាប ${low.length}`,
-          `\n<b>${esc(w.code)}</b> ${esc(w.name_en || w.name_kh)}: ${inStock.length} items · ${inStock.reduce((t2, r) => t2 + r.qty, 0)} units · low ${low.length}`);
+        const units = Math.round(inStock.reduce((t2, r) => t2 + r.qty, 0) * 1000) / 1000;
+        const lowN = low.filter((r) => r.qty > 0).length;
+        const outN = rows.filter((r) => r.carried && r.qty <= 0).length;
+        add(`\n<b>${esc(w.code)}</b> ${esc(w.name_kh)}: ${inStock.length} មុខមានស្តុក · ${units} ឯកតា · ទាប ${lowN} · អស់ ${outN}`,
+          `\n<b>${esc(w.code)}</b> ${esc(w.name_en || w.name_kh)}: ${inStock.length} items in stock · ${units} units · low ${lowN} · out ${outN}`);
       } else if (low.length) {
         add(`\n<b>${esc(w.code)}</b> (${low.length})`, `\n<b>${esc(w.code)}</b> (${low.length})`);
         low.slice(0, limit).forEach((r) => add(`• ${esc(r.kh)} <code>${esc(r.sku)}</code>: <b>${r.qty}</b> / ${r.min}`, `• ${esc(r.en)} <code>${esc(r.sku)}</code>: <b>${r.qty}</b> / ${r.min}`));
@@ -217,8 +227,8 @@ async function buildReport(code, warehouseIds, opts = {}) {
       const [bySale, byRefund, byMethod, top] = await Promise.all([
         SaleModel.aggregate([{ $match: match }, { $group: { _id: "$warehouse_id", count: { $sum: 1 }, total: { $sum: "$total" }, discount: { $sum: "$discount_total" } } }]),
         RefundModel.aggregate([{ $match: { warehouse_id: match.warehouse_id, refunded_at: match.sold_at } }, { $group: { _id: "$warehouse_id", count: { $sum: 1 }, total: { $sum: "$total" } } }]),
-        SaleModel.aggregate([{ $match: match }, { $unwind: "$payments" }, { $group: { _id: { w: "$warehouse_id", m: "$payments.name_en" }, usd: { $sum: "$payments.amount_usd" } } }]),
-        SaleModel.aggregate([{ $match: match }, { $unwind: "$items" }, { $group: { _id: { w: "$warehouse_id", v: "$items.variant_id" }, name: { $first: "$items.name_kh" }, sku: { $first: "$items.sku" }, qty: { $sum: "$items.qty" }, total: { $sum: "$items.line_total" } } }, { $sort: { total: -1 } }]),
+        SaleModel.aggregate([{ $match: match }, { $unwind: "$payments" }, { $group: { _id: { w: "$warehouse_id", m: "$payments.code" }, kh: { $first: "$payments.name_kh" }, en: { $first: "$payments.name_en" }, usd: { $sum: "$payments.amount_usd" } } }]),
+        SaleModel.aggregate([{ $match: match }, { $unwind: "$items" }, { $group: { _id: { w: "$warehouse_id", v: "$items.variant_id" }, kh: { $first: "$items.name_kh" }, en: { $first: "$items.name_en" }, sku: { $first: "$items.sku" }, qty: { $sum: "$items.qty" }, total: { $sum: "$items.line_total" } } }, { $sort: { total: -1 } }]),
       ]);
       let all = 0;
       let allNet = 0;
@@ -232,8 +242,8 @@ async function buildReport(code, warehouseIds, opts = {}) {
         add(`មធ្យម ${money(s.total / s.count)}${s.discount ? ` · បញ្ចុះ ${money(s.discount)}` : ""}${r.count ? ` · សង ${r.count} (−${money(r.total)}) · សុទ្ធ ${money(s.total - r.total)}` : ""}`,
           `avg ${money(s.total / s.count)}${s.discount ? ` · discounts ${money(s.discount)}` : ""}${r.count ? ` · refunds ${r.count} (−${money(r.total)}) · net ${money(s.total - r.total)}` : ""}`);
         const ms = byMethod.filter((x) => String(x._id.w) === String(w._id)).sort((a, b) => b.usd - a.usd);
-        if (ms.length) add(ms.map((m) => `${esc(m._id.m)} ${money(m.usd)}`).join(" · "));
-        top.filter((x) => String(x._id.w) === String(w._id)).slice(0, Math.min(limit, 5)).forEach((i) => add(`• ${esc(i.name || i.sku)} × ${i.qty} · ${money(i.total)}`));
+        if (ms.length) add(ms.map((m) => `${esc(m.kh || m.en || m._id.m)} ${money(m.usd)}`).join(" · "), ms.map((m) => `${esc(m.en || m.kh || m._id.m)} ${money(m.usd)}`).join(" · "));
+        top.filter((x) => String(x._id.w) === String(w._id)).slice(0, Math.min(limit, 5)).forEach((i) => add(`• ${esc(i.kh || i.en || i.sku)} × ${i.qty} · ${money(i.total)}`, `• ${esc(i.en || i.kh || i.sku)} × ${i.qty} · ${money(i.total)}`));
       }
       if (shops.length > 1) add(`\nសរុប: <b>${money(all)}</b> · សុទ្ធ ${money(allNet)}`, `\nAll shops: <b>${money(all)}</b> · net ${money(allNet)}`);
     } else {
@@ -273,6 +283,7 @@ function splitText(text, max = 3800) {
 
 // queue one text for one chat (split when long) → number of messages
 async function queueText(chat, { kind, code, text, warehouse_id = null }) {
+  if (sandbox() && !/^ZZ/.test(chat.title || "")) return 0;
   const parts = splitText(text);
   await TelegramMessageModel.insertMany(
     parts.map((t, i) => ({ bot_id: chat.bot_id, chat_ref: chat._id, chat_id: chat.chat_id, kind, code, text: parts.length > 1 ? `${t}\n<i>(${i + 1}/${parts.length})</i>` : t, warehouse_id })),
@@ -282,7 +293,7 @@ async function queueText(chat, { kind, code, text, warehouse_id = null }) {
 
 // queue a schedule's reports for its chats (also "Send now")
 async function queueSchedule(schedule) {
-  const chats = await TelegramChatModel.find({ _id: { $in: schedule.chat_ids }, deleted: false, status: true }).lean();
+  const chats = await TelegramChatModel.find({ _id: { $in: schedule.chat_ids }, deleted: false, status: true, ...sandboxChats() }).lean();
   let n = 0;
   for (const chat of chats) {
     const whIds = schedule.warehouse_ids?.length ? schedule.warehouse_ids : chat.warehouse_ids || [];

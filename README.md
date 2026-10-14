@@ -482,7 +482,7 @@ Dashboards: `GET /dashboard/summary` and `GET /shop/summary` also return `sales`
 
 ## Tests
 
-`npm test` runs every `tests/*.test.js` (≈ 540 checks in 28 files, ~9 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
+`npm test` runs every `tests/*.test.js` (≈ 540 checks in 28 files, ~9 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Tests and sample data run in a Telegram **sandbox** (`TELEGRAM_SANDBOX`, set by `scripts/lib/test_db_guard.js`): only test chats named `ZZ…` get messages and the test process never sends the real queue, so the real groups never see test data.
 
 ## Sample data (UAT)
 

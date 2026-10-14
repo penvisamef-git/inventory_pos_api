@@ -5,7 +5,12 @@ const SAFE = /(uat|test|dev|sample|demo|staging)/i;
 
 function assertTestDb(what) {
   const db = process.env.MONGO_DB || "";
-  if (SAFE.test(db) || process.env.ALLOW_ANY_DB === "yes") return;
+  if (SAFE.test(db) || process.env.ALLOW_ANY_DB === "yes") {
+    // tests / sample data share the database with the real Telegram groups: only "ZZ…" test chats get messages,
+    // and this process never sends the real queue (its Telegram API may be a fake test server)
+    process.env.TELEGRAM_SANDBOX = "1";
+    return;
+  }
   console.error(
     `\n⛔ ${what} stopped: MONGO_DB="${db}" does not look like a test database.\n` +
       `   It only runs on uat / test / dev / sample / demo / staging databases, so real shop data is never touched.\n` +
