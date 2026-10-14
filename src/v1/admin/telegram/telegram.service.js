@@ -294,22 +294,90 @@ async function queueSchedule(schedule) {
   return n;
 }
 
-// every minute: schedules whose time (Cambodia) and weekday match now
-async function runSchedules(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false }).formatToParts(now);
+// Schedules due now. Looks back WINDOW_MIN minutes, so a missed minute (external pinger late, server busy)
+// still sends; each time of a schedule runs once per day (last_run_key "YYYY-MM-DD HH:mm" only moves forward).
+const WINDOW_MIN = 15;
+function ppParts(d) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false }).formatToParts(d);
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
   const hhmm = `${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
-  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday);
-  const key = `${p.year}-${p.month}-${p.day} ${hhmm}`;
-  const due = await TelegramScheduleModel.find({ deleted: false, status: true, times: hhmm, days: day, last_run_key: { $ne: key } });
+  return { hhmm, day: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(p.weekday), key: `${p.year}-${p.month}-${p.day} ${hhmm}` };
+}
+async function runSchedules(now = new Date()) {
+  const slots = Array.from({ length: WINDOW_MIN }, (_, k) => ppParts(new Date(now.getTime() - k * 60000))); // now, 1 min ago, …
+  const due = await TelegramScheduleModel.find({ deleted: false, status: true, times: { $in: [...new Set(slots.map((x) => x.hhmm))] } });
   let queued = 0;
+  let ran = 0;
   for (const s of due) {
-    s.last_run_key = key;
+    // the latest slot of this schedule inside the window (right weekday), not run yet
+    const slot = slots.find((x) => s.times.includes(x.hhmm) && (s.days || []).includes(x.day));
+    if (!slot || (s.last_run_key || "") >= slot.key) continue;
+    s.last_run_key = slot.key;
     s.last_run_at = now;
     await s.save();
     queued += await queueSchedule(s);
+    ran += 1;
   }
-  return { due: due.length, queued };
+  return { due: ran, queued };
+}
+
+// a POS that has not called the cloud for POS_OFFLINE_HOURS (default 2) during shop hours (8:00–21:00) → one alert
+async function posOfflineCheck() {
+  const hour = Number(new Date().toLocaleString("en-GB", { timeZone: TZ, hour: "2-digit", hour12: false }));
+  if (hour < 8 || hour >= 21) return 0;
+  const { PosDeviceModel } = require("../pos/pos.model");
+  const hooks = require("./telegram.hooks");
+  const hours = Number(process.env.POS_OFFLINE_HOURS || 2);
+  const devs = await PosDeviceModel.find({ deleted: false, status: true, paired_at: { $ne: null }, offline_alerted_at: null, last_seen_at: { $lt: new Date(Date.now() - hours * 3600e3) } }).lean();
+  for (const d of devs) {
+    await PosDeviceModel.updateOne({ _id: d._id }, { offline_alerted_at: new Date() });
+    await hooks.posOffline(d, Math.floor((Date.now() - new Date(d.last_seen_at)) / 3600e3));
+  }
+  return devs.length;
+}
+
+// once a day from 8:00 (Cambodia): customers' children with a birthday today → Telegram (event customer_birthday)
+async function customerBirthdayCheck(now = new Date()) {
+  const pp = new Date(new Date(now).getTime() + 7 * 3600e3);
+  const today = pp.toISOString().slice(0, 10);
+  if (pp.getUTCHours() < 8) return 0;
+  const SettingModel = require("../setup/setting/setting.model");
+  await SettingModel.getMain();
+  // claim the day (only one server / tick sends it)
+  const claimed = await SettingModel.findOneAndUpdate({ key: "main", birthday_notified_on: { $ne: today } }, { birthday_notified_on: today });
+  if (!claimed) return 0;
+  const { CustomerModel } = require("../customer/customer.model");
+  const md = today.slice(5);
+  const rows = await CustomerModel.find({ deleted: false, status: true, kid_birthday: { $regex: `^\\d{4}-${md}$` } }).select("name phone kid_name kid_birthday points warehouse_id").lean();
+  const byShop = new Map();
+  rows.forEach((c) => {
+    c.turns = Number(today.slice(0, 4)) - Number(c.kid_birthday.slice(0, 4));
+    const k = String(c.warehouse_id || "");
+    byShop.set(k, [...(byShop.get(k) || []), c]);
+  });
+  const hooks = require("./telegram.hooks");
+  for (const [wh, list] of byShop) await hooks.customerBirthdays(wh || null, list);
+  return rows.length;
+}
+
+// One run of everything time-based — for hosts without a background process (Vercel):
+// GET /api/cron/tick, called every 1–10 min by an external pinger (cron-job.org / GitHub Actions).
+// schedules → offline check → send the queue (until empty or ~20 s).
+async function cronTick(now = new Date()) {
+  const started = Date.now();
+  const schedules = await runSchedules(now);
+  const offline = await posOfflineCheck();
+  const birthdays = await customerBirthdayCheck(now);
+  let sent = 0;
+  let rounds = 0;
+  while (Date.now() - started < 20000 && rounds < 30) {
+    const r = await sendPending(20);
+    sent += r.sent;
+    rounds += 1;
+    if (!r.due) break;
+  }
+  const left = await TelegramMessageModel.countDocuments({ state: "pending", next_try_at: { $lte: new Date() } });
+  return { at: now, schedules, pos_offline: offline, birthdays, sent, pending_left: left, ms: Date.now() - started };
 }
 
 // Background worker (started by index.js when the server runs): send every 10 s, schedules every minute
@@ -328,25 +396,13 @@ function startWorker() {
       busy = false;
     }
   };
-  // a POS that has not called the cloud for POS_OFFLINE_HOURS (default 2) during shop hours (8:00–21:00) → one alert
-  const offlineCheck = async () => {
-    const hour = Number(new Date().toLocaleString("en-GB", { timeZone: TZ, hour: "2-digit", hour12: false }));
-    if (hour < 8 || hour >= 21) return;
-    const { PosDeviceModel } = require("../pos/pos.model");
-    const hooks = require("./telegram.hooks");
-    const hours = Number(process.env.POS_OFFLINE_HOURS || 2);
-    const devs = await PosDeviceModel.find({ deleted: false, status: true, paired_at: { $ne: null }, offline_alerted_at: null, last_seen_at: { $lt: new Date(Date.now() - hours * 3600e3) } }).lean();
-    for (const d of devs) {
-      hooks.posOffline(d, Math.floor((Date.now() - new Date(d.last_seen_at)) / 3600e3));
-      await PosDeviceModel.updateOne({ _id: d._id }, { offline_alerted_at: new Date() });
-    }
-  };
   timers = [
-    setInterval(() => offlineCheck().catch((err) => console.error("telegram pos offline:", err.message)), 10 * 60000),
+    setInterval(() => posOfflineCheck().catch((err) => console.error("telegram pos offline:", err.message)), 10 * 60000),
+    setInterval(() => customerBirthdayCheck().catch((err) => console.error("telegram birthdays:", err.message)), 10 * 60000),
     setInterval(tick, 10000),
     setInterval(() => runSchedules().catch((err) => console.error("telegram schedule:", err.message)), 60000),
   ];
   console.log("📨 Telegram worker started");
 }
 
-module.exports = { tgCall, tokenOf, render, esc, templatesOf, pickText, notify, sendPending, buildReport, splitText, queueText, queueSchedule, runSchedules, startWorker, timeText };
+module.exports = { tgCall, tokenOf, render, esc, templatesOf, pickText, notify, sendPending, buildReport, splitText, queueText, queueSchedule, runSchedules, posOfflineCheck, customerBirthdayCheck, cronTick, startWorker, timeText };

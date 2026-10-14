@@ -42,6 +42,8 @@ const EVENTS = [
     kh: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\n{items}\nដោយ {name} · អនុម័ត {approved_by}\nមូលហេតុ: {reason}", en: "↩️ <b>{warehouse}</b> {kind} {invoice_no} · {total}\n{items}\nby {name} · approved by {approved_by}\nreason: {reason}" },
   { code: "pos_sale", group: "pos", phase: 3, name_kh: "វិក្កយបត្រថ្មី (រាល់ការលក់)", name_en: "New sale (every invoice)",
     kh: "🧾 <b>{warehouse}</b> {invoice_no} · <b>{total}</b>\n{items}\n{payment} · {name}{flags}", en: "🧾 <b>{warehouse}</b> {invoice_no} · <b>{total}</b>\n{items}\n{payment} · {name}{flags}" },
+  { code: "customer_birthday", group: "pos", phase: 3, name_kh: "ខួបកំណើតកូនអតិថិជន (ម៉ោង 8 ព្រឹក)", name_en: "Customers' children birthdays (8:00)",
+    kh: "🎂 <b>{warehouse}</b> ខួបកំណើតថ្ងៃនេះ ({count})\n{items}", en: "🎂 <b>{warehouse}</b> birthdays today ({count})\n{items}" },
   { code: "pos_offline", group: "pos", phase: 3, name_kh: "POS មិនបាន Sync យូរ", name_en: "POS not synced", kh: "📡 <b>{warehouse}</b> POS មិនបាន Sync {hours} ម៉ោង", en: "📡 <b>{warehouse}</b> POS has not synced for {hours} h" },
 ];
 

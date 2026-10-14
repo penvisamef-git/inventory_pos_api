@@ -180,6 +180,8 @@ async function priceGrid(variants, { warehouseId = null, shopIds = null, at = ne
       name_en: v.name_en,
       options: v.options,
       status: v.status,
+      barcode: v.barcode || null,
+      unit_barcodes: (v.unit_barcodes || []).map((b) => ({ unit_id: b.unit_id, barcode: b.barcode })),
       product_id: p._id,
       units: units.map(({ unit, factor, is_base }) => {
         const k = `${v._id}|${unit._id}`;

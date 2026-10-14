@@ -54,7 +54,8 @@ const lineSchema = new mongoose.Schema(
     qty: { type: Number, required: true }, // in the sale unit
     base_qty: { type: Number, required: true },
     price: { type: Number, required: true }, // USD per sale unit
-    discount: { type: Number, default: 0 }, // USD for the line (incl. its share of the bill discount)
+    discount: { type: Number, default: 0 }, // USD for the line (promotion + its share of the bill discount)
+    promo_discount: { type: Number, default: 0 }, // USD of the line from promotions
     line_total: { type: Number, required: true }, // USD after discount
     unit_cost: { type: Number, default: null }, // avg cost per base unit when posted (cloud)
     cost_total: { type: Number, default: null },
@@ -93,7 +94,15 @@ const saleSchema = new mongoose.Schema(
     sold_at: { type: Date, required: true },
     items: { type: [lineSchema], default: [] },
     subtotal: { type: Number, required: true }, // before discounts
-    discount_total: { type: Number, default: 0 },
+    discount_total: { type: Number, default: 0 }, // manual bill discount (cashier / manager)
+    promo_total: { type: Number, default: 0 }, // promotions (USD)
+    promotions: { type: [{ _id: false, promo_id: oid("Promotion"), code: String, name_kh: String, name_en: String, amount: Number }], default: [] },
+    customer_id: oid("Customer"),
+    customer_uuid: { type: String, default: null },
+    customer_name: { type: String, default: "" },
+    customer_phone: { type: String, default: "" },
+    points_earned: { type: Number, default: 0 },
+    points_redeemed: { type: Number, default: 0 },
     tax_mode: { type: String, default: "none" },
     tax_rate: { type: Number, default: 0 },
     tax_amount: { type: Number, default: 0 },
@@ -121,6 +130,7 @@ saleSchema.index({ invoice_no: 1 }, { unique: true });
 saleSchema.index({ warehouse_id: 1, sold_at: -1 });
 saleSchema.index({ sold_at: -1 });
 saleSchema.index({ cashier_id: 1, sold_at: -1 });
+saleSchema.index({ customer_id: 1, sold_at: -1 });
 const SaleModel = mongoose.model("Sale", saleSchema);
 
 // ---------------------------------------------------------------------------------------------
@@ -145,6 +155,8 @@ const shiftSchema = new mongoose.Schema(
     counted_khr: { type: Number, default: null },
     report: { type: Object, default: null }, // invoice_count, sales_total, methods, expected_usd/khr, diff_* …
     note: { type: String, default: "" },
+    // drawer money that is not a sale: [{ uuid, type: in | out, kind, category, amount, currency, amount_usd, note, ref, by_name, approved_by_name, at }]
+    cash_moves: { type: Array, default: [] },
     received_at: { type: Date, default: Date.now },
   },
   { timestamps: { createdAt: "created_date", updatedAt: "updated_date" } },

@@ -122,6 +122,19 @@ const hooks = {
       }),
     ),
 
+  // 8:00 every day: children of customers with a birthday today, one message per home shop
+  customerBirthdays: (warehouseId, list) =>
+    run(async () =>
+      notify("customer_birthday", {
+        warehouse_ids: warehouseId ? [warehouseId] : [],
+        data: {
+          warehouse: warehouseId ? await codeOf(warehouseId) : "—",
+          count: list.length,
+          __raw: { items: list.slice(0, 30).map((c) => `• ${esc(c.kid_name || "—")} (${c.turns}) — ${esc(c.name)} · ${c.phone} · ${c.points} pts`).join("\n") },
+        },
+      }),
+    ),
+
   posOffline: (device, hours) =>
     run(async () =>
       notify("pos_offline", {

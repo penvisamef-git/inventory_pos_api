@@ -20,6 +20,9 @@ const { round } = require("../../../util/helper");
 const { serverError, noIDFound } = require("../../../util/master_crud");
 const { can_manage_stock } = require("../../../util/permission");
 const { ROLES } = require("../../../util/user_roles");
+const customerSvc = require("../customer/customer.service");
+const promotionRoute = require("../promotion/promotion.route");
+const bakong = require("../../../util/bakong");
 
 const isId = (v) => mongoose.Types.ObjectId.isValid(v) && String(new mongoose.Types.ObjectId(v)) === String(v);
 const ok = (res, data, message, status = 200) => res.status(status).json({ success: true, data, message });
@@ -168,9 +171,15 @@ async function snapshot(device) {
       receipt_footer: setting?.receipt_footer || "",
       receipt_template: setting?.receipt_template || "classic", // admin → receipt style (24)
       ui_theme: setting?.ui_theme || "forest", // admin → General settings → System theme
+      loyalty_enabled: setting?.loyalty_enabled !== false,
+      points_per_usd: Number(setting?.points_per_usd ?? 1),
+      point_value_usd: Number(setting?.point_value_usd ?? 0.01),
+      min_redeem_points: Number(setting?.min_redeem_points ?? 100),
     },
+    customers: await customerSvc.forPos(),
+    promotions: await promotionRoute.forPos(),
     rate: rate ? { rate: rate.rate, effective_from: rate.effective_from } : null,
-    payment_methods: methods.map((m) => ({ _id: m._id, code: m.code, name_kh: m.name_kh, name_en: m.name_en || m.name_kh, type: m.type, currency: m.currency, requires_reference: !!m.requires_reference, icon: m.icon?.url || null, qr_image: (m.qr_enabled && m.qr_image?.url) || null })),
+    payment_methods: methods.map((m) => ({ _id: m._id, code: m.code, name_kh: m.name_kh, name_en: m.name_en || m.name_kh, type: m.type, currency: m.currency, requires_reference: !!m.requires_reference, icon: m.icon?.url || null, qr_image: (m.qr_enabled && m.qr_image?.url) || null, khqr: m.online_mode && m.bakong_account_id ? { account: m.bakong_account_id, name: m.merchant_name, city: m.merchant_city || "Phnom Penh", currency: m.currency === "KHR" ? "KHR" : "USD" } : null })),
     users: users.map((u) => ({ _id: u._id, firstname: u.firstname, lastname: u.lastname, email: u.email, role: u.role, is_manager: u.role === ROLES.SHOP_MANAGER.value, pin_hash: u.pos_pin })),
     categories: categories.map((c) => ({ _id: c._id, code: c.code, name_kh: c.name_kh, name_en: c.name_en || c.name_kh, parent_id: c.parent_id || null, image: c.image?.url || null })),
     brands: brands.map((b) => ({ _id: b._id, code: b.code, name_kh: b.name_kh, name_en: b.name_en || b.name_kh })),
@@ -217,6 +226,7 @@ async function saveSale(device, inv) {
       base_qty: round(qty * factor, 4),
       price: round(Number(i.price) || 0, 4),
       discount: round(Number(i.discount) || 0, 4),
+      promo_discount: round(Number(i.promo_discount) || 0, 4),
       line_total: round(Number(i.line_total) || 0, 4),
     });
   }
@@ -241,6 +251,8 @@ async function saveSale(device, inv) {
           items: lines,
           subtotal: round(Number(inv.subtotal) || 0, 4),
           discount_total: round(Number(inv.discount_total) || 0, 4),
+          promo_total: round(Number(inv.promo_total) || 0, 4),
+          promotions: (Array.isArray(inv.promotions) ? inv.promotions : []).slice(0, 20).map((p) => ({ promo_id: isId(p.promo_id) ? p.promo_id : null, code: String(p.code || "").slice(0, 20), name_kh: String(p.name_kh || "").slice(0, 120), name_en: String(p.name_en || "").slice(0, 120), amount: round(Number(p.amount) || 0, 2) })),
           tax_mode: inv.tax_mode || "none",
           tax_rate: Number(inv.tax_rate) || 0,
           tax_amount: round(Number(inv.tax_amount) || 0, 4),
@@ -298,7 +310,13 @@ async function saveSale(device, inv) {
     return sale;
   });
   if (r.error) return { error: r.error };
-  return { sale: r.result };
+  // customer: link + points (after the sale is safe; a failure here never loses the invoice)
+  try {
+    r.customer_id = await customerSvc.onSale(r.result, inv);
+  } catch (err) {
+    console.error("customer points:", err.message);
+  }
+  return { sale: r.result, customer_id: r.customer_id };
 }
 
 // a refund / void sent by the POS → stock back into the shop (same batches the sale took, cost of the sale)
@@ -407,7 +425,12 @@ async function saveRefund(device, rf) {
     return doc;
   });
   if (r.error) return { error: r.error };
-  return { refund: r.result };
+  try {
+    if (sale.customer_id) await customerSvc.onRefund(r.result, sale, rf);
+  } catch (err) {
+    console.error("customer refund points:", err.message);
+  }
+  return { refund: r.result, customer_id: sale.customer_id || null };
 }
 
 // a shift sent by the POS (open, and again when closed) → upsert by device + shift_no
@@ -437,6 +460,20 @@ async function saveShift(device, s) {
         counted_khr: closed ? num(s.counted_khr) : null,
         report: closed && s.report && typeof s.report === "object" ? s.report : null,
         note: String(s.note || "").slice(0, 300),
+        cash_moves: (Array.isArray(s.cash_moves) ? s.cash_moves : []).slice(0, 500).map((m) => ({
+          uuid: String(m.uuid || "").slice(0, 60),
+          type: m.type === "in" ? "in" : "out",
+          kind: String(m.kind || "other").slice(0, 30),
+          category: String(m.category || "").slice(0, 40),
+          amount: Number(m.amount) || 0,
+          currency: m.currency === "KHR" ? "KHR" : "USD",
+          amount_usd: round(Number(m.amount_usd) || 0, 4),
+          note: String(m.note || "").slice(0, 200),
+          ref: String(m.ref || "").slice(0, 60),
+          by_name: String(m.by_name || "").slice(0, 80),
+          approved_by_name: String(m.approved_by_name || "").slice(0, 80),
+          at: m.at ? new Date(m.at) : null,
+        })),
         received_at: new Date(),
       },
     },
@@ -603,6 +640,15 @@ const route = (prop) => {
     ok(res, { device_key: `${doc._id}.${secret}`, device: { _id: doc._id, name: doc.name, code: doc.code }, warehouse: wh }, `បានភ្ជាប់ ${doc.code}`);
   }));
 
+  // ===================================== POS: Bakong KHQR ================================================
+  // { md5 } of the KHQR text → { paid, ready, hash, amount, currency } — the POS asks every few seconds
+  prop.app.post(`${dev}/khqr/check`, ...devGuard, wrap(async (req, res) => {
+    const md5 = String(req.body?.md5 || "").toLowerCase();
+    if (!/^[a-f0-9]{32}$/.test(md5)) return bad(res, "md5?");
+    const r = await bakong.checkMd5(md5);
+    ok(res, r);
+  }));
+
   prop.app.get(`${dev}/ping`, ...devGuard, wrap(async (req, res) => ok(res, { server_time: new Date(), device: { _id: req.device._id, code: req.device.code, name: req.device.name } })));
 
   prop.app.get(`${dev}/pull`, ...devGuard, wrap(async (req, res) => {
@@ -618,10 +664,30 @@ const route = (prop) => {
     const shifts = Array.isArray(req.body?.shifts) ? req.body.shifts : [];
     const events = Array.isArray(req.body?.events) ? req.body.events : []; // login / logout
     const refunds = Array.isArray(req.body?.refunds) ? req.body.refunds : [];
+    const customers = Array.isArray(req.body?.customers) ? req.body.customers : []; // added on the POS (offline)
+    if (customers.length > 500) return bad(res, "ច្រើនបំផុត 500 អតិថិជនក្នុងមួយដង");
     if (list.length > MAX_PUSH) return bad(res, `ច្រើនបំផុត ${MAX_PUSH} វិក្កយបត្រក្នុងមួយដង`);
     if (shifts.length > 50) return bad(res, "ច្រើនបំផុត 50 វេនក្នុងមួយដង");
     if (refunds.length > MAX_PUSH) return bad(res, `ច្រើនបំផុត ${MAX_PUSH} ការសងប្រាក់ក្នុងមួយដង`);
-    const out = { accepted: [], duplicate: [], failed: [], shifts: { saved: [], failed: [] }, refunds: { accepted: [], duplicate: [], failed: [] }, events: { saved: [] } };
+    const out = { accepted: [], duplicate: [], failed: [], shifts: { saved: [], failed: [] }, refunds: { accepted: [], duplicate: [], failed: [] }, events: { saved: [] }, customers: { saved: [], failed: [] }, customer_points: {} };
+    const touched = new Set(); // customers whose points changed → their new balance goes back to the POS
+    for (const c of customers) {
+      try {
+        const r = await customerSvc.fromPos(req.device, c);
+        if (r.error) out.customers.failed.push({ uuid: c?.uuid, error: r.error });
+        else {
+          out.customers.saved.push({ uuid: c.uuid, _id: r.customer._id, code: r.customer.code, merged: !!r.merged });
+          if (!r.merged && r.customer.uuid !== c.uuid) await require("../customer/customer.model").CustomerModel.updateOne({ _id: r.customer._id, uuid: null }, { uuid: c.uuid });
+        }
+      } catch (err) {
+        out.customers.failed.push({ uuid: c?.uuid, error: err.message });
+      }
+    }
+    // a customer merged by phone: the invoices of this push use the cloud id
+    const uuidToId = new Map(out.customers.saved.map((x) => [x.uuid, String(x._id)]));
+    list.forEach((inv) => {
+      if (inv && inv.customer_uuid && !inv.customer_id && uuidToId.has(inv.customer_uuid)) inv.customer_id = uuidToId.get(inv.customer_uuid);
+    });
     for (const e of events.slice(0, 200)) {
       try {
         if (!e?.uuid || !["login", "logout"].includes(e.action)) continue;
@@ -654,6 +720,7 @@ const route = (prop) => {
         else if (r.error) out.failed.push({ uuid: inv?.uuid, error: r.error });
         else {
           out.accepted.push(inv.uuid);
+          if (r.customer_id) touched.add(String(r.customer_id));
           telegram.saleReceived(req.device, r.sale);
         }
       } catch (err) {
@@ -668,12 +735,20 @@ const route = (prop) => {
         else if (r.error) out.refunds.failed.push({ uuid: rf?.uuid, error: r.error });
         else {
           out.refunds.accepted.push(rf.uuid);
+          if (r.customer_id) touched.add(String(r.customer_id));
           telegram.refundReceived(req.device, r.refund);
         }
       } catch (err) {
         if (err.code === 11000) out.refunds.duplicate.push(rf?.uuid);
         else out.refunds.failed.push({ uuid: rf?.uuid, error: err.message });
       }
+    }
+    out.customers.saved.forEach((x) => touched.add(String(x._id)));
+    if (touched.size) {
+      const { CustomerModel } = require("../customer/customer.model");
+      (await CustomerModel.find({ _id: { $in: [...touched] } }).select("points").lean()).forEach((c) => {
+        out.customer_points[String(c._id)] = c.points;
+      });
     }
     PosDeviceModel.updateOne({ _id: req.device._id }, { last_push_at: new Date() }).catch(() => {});
     ok(res, out);

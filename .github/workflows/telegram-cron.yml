@@ -1,0 +1,25 @@
+# Telegram schedule + POS offline alerts for Vercel (no background process there).
+# Calls the API's /api/cron/tick every 10 minutes. Backup of cron-job.org (which can call it every minute).
+# Setup once: GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
+#   API_URL      e.g. https://inventory-pos-api.vercel.app
+#   CRON_SECRET  the same value as CRON_SECRET in Vercel → Project → Settings → Environment Variables
+# GitHub may start scheduled runs a few minutes late; the API looks back 15 minutes so nothing is missed.
+name: Telegram cron
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call /api/cron/tick
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$API_URL" ] || [ -z "$CRON_SECRET" ]; then echo "Set the API_URL and CRON_SECRET secrets"; exit 0; fi
+          curl -fsS --max-time 60 -H "x-cron-key: $CRON_SECRET" "$API_URL/api/cron/tick"

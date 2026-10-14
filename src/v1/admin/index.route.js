@@ -41,6 +41,7 @@ const index = (prop) => {
   // ================= Purchase & Stock =================
   const supplierRoute = require("./purchase/supplier/supplier.route");
   supplierRoute(prop);
+  require("./purchase/payable/payable.route")(prop);
   const stockRoute = require("./stock/stock.route");
   stockRoute(prop);
   const openingRoute = require("./stock/opening/opening.route");
@@ -69,6 +70,12 @@ const index = (prop) => {
   // ================= Sales (invoices, report, shifts from the POS) =================
   const saleRoute = require("./sale/sale.route");
   saleRoute(prop);
+
+  // ================= Customers (loyalty) + promotions =================
+  const customerRoute = require("./customer/customer.route");
+  customerRoute(prop);
+  const promotionRoute = require("./promotion/promotion.route");
+  promotionRoute(prop);
 
   // ================= Other: personal notes =================
   const noteRoute = require("./note/note.route");

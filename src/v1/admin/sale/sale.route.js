@@ -326,6 +326,9 @@ const route = (prop) => {
     });
   }));
 
+  // profit by product / brand / category / supplier + slow and dead stock (before /:id)
+  require("./sale.profit")(prop, { base, guard, wrap, saleFilter, seesCost, ok, bad });
+
   // ===================================== shifts ================================================
   prop.app.get(`${base}/shift`, ...guard, wrap(async (req, res) => {
     const q = req.query;

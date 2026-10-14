@@ -25,8 +25,12 @@ const EDITABLE = [
   "low_stock_default",
   "expiry_alert_days",
   "ui_theme",
+  "loyalty_enabled",
+  "points_per_usd",
+  "point_value_usd",
+  "min_redeem_points",
 ];
-const NUMBERS = ["khr_rounding", "tax_rate", "low_stock_default", "expiry_alert_days"];
+const NUMBERS = ["khr_rounding", "tax_rate", "low_stock_default", "expiry_alert_days", "points_per_usd", "point_value_usd", "min_redeem_points"];
 
 const route = (prop) => {
   // **************** Declaration ****************
@@ -80,6 +84,7 @@ const route = (prop) => {
         }
         updateFields[key] = n;
       }
+      if (updateFields.loyalty_enabled !== undefined) updateFields.loyalty_enabled = !!updateFields.loyalty_enabled;
       if (updateFields.tax_mode !== undefined && !TAX_MODES.includes(updateFields.tax_mode)) {
         return res.status(400).json({ success: false, message: taxModeInvalid });
       }

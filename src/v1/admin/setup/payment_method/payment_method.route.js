@@ -7,6 +7,18 @@ const { saveSortOrder } = require("../../../../util/sort_order");
 const { can_manage_setup, can_view_master } = require("../../../../util/permission");
 const baseRoute = "setup/payment-method";
 
+// Dynamic KHQR needs the Bakong account id (name@bank) and a merchant name
+const bakongOf = (b, on) => {
+  const fields = {
+    bakong_account_id: String(b.bakong_account_id || "").trim().slice(0, 32),
+    merchant_name: String(b.merchant_name || "").trim().slice(0, 25),
+    merchant_city: String(b.merchant_city || "").trim().slice(0, 15) || "Phnom Penh",
+  };
+  if (fields.bakong_account_id && !/^[^\s@]+@[a-z0-9_]+$/i.test(fields.bakong_account_id)) return { error: "គណនី Bakong ត្រូវតែដូច name@bank / Bakong account must look like name@bank" };
+  if (on && fields.bakong_account_id && !fields.merchant_name) fields.merchant_name = fields.bakong_account_id.split("@")[0];
+  return { fields };
+};
+
 const { PAYMENT_TYPES, PAYMENT_CURRENCIES } = PaymentMethodModel;
 const CODE_PATTERN = /^[a-z0-9_]{2,30}$/;
 
@@ -59,6 +71,8 @@ const route = (prop) => {
 
       const { name_kh, name_en, type, currency, requires_reference, online_mode, icon, qr_enabled, qr_image, sort_order, note, status } =
         req.body;
+      const bakong = bakongOf(req.body, online_mode);
+      if (bakong.error) return res.status(400).json({ success: false, message: bakong.error });
       if (qr_enabled && !qr_image?.url) return res.status(400).json({ success: false, message: "សូមបញ្ចូលរូប QR! / Upload the QR picture" });
       const saveData = await PaymentMethodModel.create({
         code,
@@ -68,6 +82,7 @@ const route = (prop) => {
         currency: currency || "any",
         requires_reference: !!requires_reference,
         online_mode: !!online_mode,
+        ...bakong.fields,
         icon: icon || null,
         qr_enabled: !!qr_enabled,
         qr_image: qr_image || null,
@@ -158,6 +173,14 @@ const route = (prop) => {
       if (updateFields.qr_enabled) {
         const cur = await PaymentMethodModel.findById(id).select("qr_image").lean();
         if (!(updateFields.qr_image?.url || (!clearQr && cur?.qr_image?.url))) return res.status(400).json({ success: false, message: "សូមបញ្ចូលរូប QR! / Upload the QR picture" });
+      }
+
+      if (["online_mode", "bakong_account_id", "merchant_name", "merchant_city"].some((k) => body[k] !== undefined)) {
+        const cur = await PaymentMethodModel.findById(id).select("online_mode bakong_account_id merchant_name merchant_city").lean();
+        const merged = { ...cur, ...body };
+        const bakong = bakongOf(merged, merged.online_mode);
+        if (bakong.error) return res.status(400).json({ success: false, message: bakong.error });
+        Object.assign(updateFields, { online_mode: !!merged.online_mode }, bakong.fields);
       }
 
       if (Object.keys(updateFields).length === 1) {

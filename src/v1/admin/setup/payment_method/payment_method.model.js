@@ -13,7 +13,10 @@ const paymentMethodSchema = new mongoose.Schema(
     type: { type: String, enum: PAYMENT_TYPES, required: true },
     currency: { type: String, enum: PAYMENT_CURRENCIES, default: "any" },
     requires_reference: { type: Boolean, default: false }, // cashier must type a reference no. (offline QR)
-    online_mode: { type: Boolean, default: false }, // dynamic QR with amount when the POS is online
+    online_mode: { type: Boolean, default: false }, // dynamic Bakong KHQR with the amount (paid → the POS finishes by itself)
+    bakong_account_id: { type: String, trim: true, default: "" }, // shop@aclb — the Bakong account that receives the money
+    merchant_name: { type: String, trim: true, default: "" }, // name shown in the customer's bank app
+    merchant_city: { type: String, trim: true, default: "Phnom Penh" },
     icon: { type: imageSchema, default: null },
     qr_enabled: { type: Boolean, default: false }, // show a fixed QR (shop's KHQR / ABA) on the customer display
     qr_image: { type: imageSchema, default: null }, // the uploaded QR picture

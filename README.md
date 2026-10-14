@@ -143,6 +143,8 @@ Setting also has `ui_theme`: `forest | ocean | candy | navy` (admin web look for
 ### Payment method — `/setup/payment-method` (view: all web roles · edit: admin)
 Standard routes + `-all`, `-sort`. `{ code, name_kh, name_en, type: cash|qr|card|bank, currency: USD|KHR|any, requires_reference, online_mode, icon, sort_order }`
 - `code`: a-z 0-9 _ (saved lowercase). Seeded: `cash_usd`, `cash_khr`, `khqr`, `aba`.
+- Fixed QR picture: `qr_enabled` + `qr_image` → shown on the customer display.
+- **Bakong KHQR with the amount**: `online_mode: true` + `bakong_account_id` (`name@bank`, e.g. `kidsshop@aclb`), `merchant_name` (English letters, default = the account name), `merchant_city`. The POS makes the KHQR itself (also offline, EMV + CRC16, 15 min expiry) and asks the cloud every 3 s whether it is paid (see `/pos-device/khqr/check`); paid → the sale completes by itself. Pull sends it as `payment_methods[].khqr { account, name, city, currency }`.
 
 ### Unit — `/product/unit` (view: all web roles · edit: admin, central manager)
 Standard routes + `-all`, `-sort`. `{ code, name_kh, name_en, note, status }`
@@ -282,6 +284,31 @@ Views (shop manager: own shops, **no cost fields**):
 ### Supplier — `/purchase/supplier` (view: web roles · edit: admin, central manager)
 Standard routes. `{ code, name, contact_name, phone, email, address, vat_no, payment_term_days }` · delete blocked while goods receives use it.
 
+### Supplier debts — `/purchase/payable` (view + pay: admin, central manager, accountant · void: admin)
+What we owe = posted goods receives (`posted_cost`) − payments. Payments go to the **oldest bill first**; a bill is late after the supplier's `payment_term_days` (from the posting date).
+
+| | | |
+|---|---|---|
+| `GET` | `/purchase/payable` | `?q=&open=1` → per supplier `billed, paid, balance, overdue, open_bills, max_days_late, last_paid_at` + `totals` |
+| `GET` | `/purchase/payable/:supplier_id` | `bills` (each: `bill, paid, due, due_date, overdue, days_late`) + `payments` |
+| `POST` | `/purchase/payable/payment` | `{ supplier_id, amount (USD), paid_at, method: bank\|cash\|cheque\|other, reference, note }` → `SP-2610-0001`; never more than the balance |
+| `PUT` | `/purchase/payable/payment/:id/void` | `{ reason }` (admin) |
+
+## Customers + loyalty — `/customer` (view: web roles · edit: admin, central manager; shop manager: own shops)
+
+| | | |
+|---|---|---|
+| `GET` | `/customer` | `?q=` (name / phone / code / child) `&warehouse_id=&birthday_month=1-12&sort=` + `summary`, `loyalty` |
+| `GET` | `/customer/birthdays` | children with a birthday in the next `?days=` (default 7) |
+| `GET` | `/customer/:id` | one customer + last invoices + points history |
+| `POST` / `PUT` / `DELETE` | `/customer` · `/customer/:id` | `{ name, phone (unique, cleaned to 0…), gender, kid_name, kid_birthday, kid_gender, address, warehouse_id, note }` |
+| `POST` | `/customer/:id/points` | `{ points: +/-, note }` (admin, central manager) |
+
+Points (Setting: `loyalty_enabled`, `points_per_usd` (1), `point_value_usd` (0.01 → 100 pts = $1), `min_redeem_points` (100)): earned on each POS sale (what is paid in money), used as money on the POS, earned points taken back and used points given back on refunds. The POS adds customers too (also offline, pushed first, merged by phone). Telegram `customer_birthday`: children's birthdays today, per home shop, from 8:00.
+
+## Promotions — `/promotion` (view: web roles · edit: admin, central manager)
+`?q=&state=active|upcoming|ended|off` + standard routes. Types: `percent`, `amount_off`, `buy_x_get_y` (`buy_qty`, `get_qty`, `get_percent`), `bundle` (`bundle_items`, `bundle_price`), `bill_percent`, `bill_amount` (`min_amount`). Scope `all|category|brand|product`, `start_at`, `end_at`, `days` (0–6), `time_from` / `time_to` (happy hour), `warehouse_ids`, `member_only`, `priority`. The POS pulls the ones not ended and applies them by itself (also offline); invoices keep `promotions[]` and `promo_total`.
+
 ## Shop portal API — `/shop` (admin, central manager: any warehouse · shop manager: own shops · accountant / cashier: no)
 
 | Method | Route | |
@@ -358,17 +385,36 @@ Each shop counter runs **local_pos_api** (local MongoDB, sells offline) + **loca
 | `GET` | `/pos/sale` | invoices received `?warehouse_id=&device_id=&from=&to=&q=` |
 | `POST` | `/pos-device/pair` | API key + `{ code }` → `device_key` (`<id>.<secret>`, only a sha256 hash is kept) |
 | `GET` | `/pos-device/ping` · `/pos-device/pull` | header `x-device-key` · pull = `setting` (incl. `receipt_template`, `ui_theme`), `device` (+ `last_invoice_no`, `last_refund_no`, `last_shift_no` so a cleared POS continues the numbers), the shop's data for selling offline (setting, rate, payment methods (+ `qr_image` when *Show a QR* is on), staff of the shop with a POS PIN — hash only, categories, brands, products → variants → prices per sale unit (shop price else default), barcodes, shop stock). No cost. |
-| `POST` | `/pos-device/push` | `{ invoices, refunds, shifts, events }` → `{ accepted, duplicate, failed, refunds: { accepted, duplicate, failed }, shifts: { saved, failed }, events: { saved } }` |
+| `POST` | `/pos-device/push` | `{ customers, invoices, refunds, shifts, events }` → `{ accepted, duplicate, failed, refunds: { accepted, duplicate, failed }, shifts: { saved, failed }, events: { saved }, customers: { saved, failed }, customer_points }` |
+| `POST` | `/pos-device/khqr/check` | `{ md5 }` of the KHQR text → `{ ready, paid, hash, amount, currency }` — asks Bakong with `BAKONG_TOKEN`; without the token `ready: false` (the cashier confirms by hand) |
 
 Push (every part optional, idempotent by `uuid` / device + `shift_no`):
 - **invoices** (≤ 100): `invoice_no` must start with the device code → `Sale` + `sale_out` movements from the shop (FEFO batches, the rest without batch, **negative allowed**), cost per line at the moving average (`ref_type: invoice`).
 - **refunds** (≤ 100, refund / void): `{ uuid, refund_no, sale_uuid, invoice_no, kind, items: [{ index, variant_id, qty, amount }], total, payments, reason, approved_by_name … }` → `SaleRefund` + `refund_in` movements back into the **same batches** the sale took, at the **cost of the sale** (`ref_type: refund`); the invoice gets `items[].refunded_qty`, `refunded_total`, `refund_status` (partial / full). Never more than sold; an invoice not in the cloud yet → failed, the POS retries.
-- **shifts** (≤ 50): cash drawer shift, sent when opened and again when closed.
+- **shifts** (≤ 50): cash drawer shift, sent when opened, after each cash in / out and when closed. `cash_moves: [{ uuid, type: in|out, kind: expense|safe_drop|float|deposit|deposit_back|deposit_kept|exchange_cash|other, amount, currency, amount_usd, note, by_name, approved_by_name, at }]` (expenses, money to the safe, change brought in, layaway deposits, exchanges paid in cash).
+- Payments that are not money today: `points` (loyalty), `deposit` (layaway deposit paid before, `reference` = hold no.), `exchange` (credit from a refund made as an exchange, `reference` = refund no.; the refund's payment is `exchange` too, so no cash left the drawer).
 - **events** (≤ 200): `{ uuid, action: login|logout, user_id, name, at }` → `PosAttendance`.
 
 A refused device key says why: `code: DEVICE_UNPAIRED` (deleted / new pairing code) or `DEVICE_OFF` (turned off) → the POS clears its data. Device keys are cached 60 s.
 
 Telegram (POS events — tick them per chat): `pos_login` (login / logout), `shift_open`, `shift_close` (with the cash difference), `invoice_void` (void / refund), `pos_sale` (every invoice — off by default), `pos_offline` (no call for `POS_OFFLINE_HOURS`, default 2, during 8:00–21:00, once). Reports: `daily_sales` (per shop: sales, refunds, net, payments, top items), `attendance` (first login / last logout per person).
+
+
+### Bakong KHQR (automatic payment check)
+1. Register at https://api-bakong.nbc.gov.kh/register (with the shop's Bakong account) → token (renew it when it expires).
+2. Vercel → Environment Variables: `BAKONG_TOKEN` = the token → Redeploy. (Optional `BAKONG_API_URL` = a relay, if the Bakong API refuses calls from outside Cambodia.)
+3. Admin → Payment methods → the KHQR method → switch on *Bakong KHQR with the amount*, type the Bakong account (`name@bank`).
+Without the token the POS still shows the QR with the amount; the cashier checks the payment and presses Complete.
+
+### Scheduler on Vercel — `GET /api/cron/tick`
+
+Vercel has no background process, so the Telegram worker (`startWorker`) does not run there. `/api/cron/tick` does the same work once: schedules due in the last 15 min (each time once a day), POS offline alerts, then sends the Telegram queue (≤ 20 s). Protected by `CRON_SECRET` (header `x-cron-key` or `?key=`), no API key.
+
+Setup once:
+1. Vercel → Project → Settings → Environment Variables: `CRON_SECRET` = a long random text (e.g. `openssl rand -hex 24`) → Redeploy.
+2. cron-job.org (free) → Create cronjob: URL `https://inventory-pos-api.vercel.app/api/cron/tick`, every **1 minute**, Advanced → Headers: `x-cron-key: <CRON_SECRET>`.
+3. Backup: GitHub → this repo → Settings → Secrets → Actions: `API_URL`, `CRON_SECRET` → `.github/workflows/telegram-cron.yml` calls it every 10 min.
+Events (sale, shift, transfer …) are queued at once and sent at the next tick (≤ 1 min with cron-job.org).
 
 ## Sales — `/sale` (admin, central manager, accountant: all shops + cost / profit · shop manager: own shops, no cost · cashier: no)
 
@@ -381,6 +427,9 @@ Invoices and cash shifts come from the POS (`/pos-device/push` with `invoices` a
 | `GET` | `/sale/shift` | cash shifts (`state`, `flag=diff`) + `summary` (open, short, total difference) |
 | `GET` | `/sale/filters` | shops, POS, cashiers, payment methods for the filters; `cost` = may this user see cost |
 | `GET` | `/sale/:id` | one invoice (id or invoice no.): lines (`refunded_qty`), payments, change, approvals, shift, `refunds` |
+
+| `GET` | `/sale/profit` | `?group=product\|variant\|category\|brand\|supplier&sort=profit\|sales\|margin\|qty` → rows `{ qty, returned_qty, sales, cost, profit, margin, invoices }` + `totals` (refunds in the period taken out; supplier = the last goods receive of the SKU) — only users who see all shops |
+| `GET` | `/sale/slow-stock` | `?days=60&warehouse_id=` → shop stock with no sale in `days` (`dead`) or more than 2×`days` of stock at the current pace (`slow`): `qty, sold_qty, last_sold_at, days_of_cover` (+ `value` for cost roles) |
 
 Profit = sales − tax − cost (average cost when the cloud received the sale). Refunds count on the day of the refund: `kpi.refund_total`, `refund_count`, `void_count`, `net_total` = sales − refunds; profit loses (refund − cost of the goods back).
 
@@ -433,7 +482,7 @@ Dashboards: `GET /dashboard/summary` and `GET /shop/summary` also return `sales`
 
 ## Tests
 
-`npm test` runs every `tests/*.test.js` (≈ 440 checks in 21 files, ~7 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
+`npm test` runs every `tests/*.test.js` (≈ 540 checks in 28 files, ~9 min) against the **test** database with the sample data; `npm test -- stock price` runs only matching files. Each test creates `@local.test` users / `ZZ` codes and deletes them at the end (document counters restored). Stop `npm run dev` while testing (its Telegram sender may pick up test messages).
 
 ## Sample data (UAT)
 
@@ -456,4 +505,5 @@ Dashboards: `GET /dashboard/summary` and `GET /shop/summary` also return `sales`
 | 2+ | Shop portal API · Telegram (bots, chats, events, scheduled reports) | ✅ |
 | 3 | POS: device pairing, sync pull / push, Local POS API + screen (shift, sell, hold, discount / out-of-stock approval, receipt, customer display, own report, theme, unlink) | ✅ |
 | 4 | Sales in cloud (invoices, report, cash shifts) · shop portal Sales · QR catalog · notes · stock count · void / refund · Telegram POS events + reports · sales on the dashboards | ✅ |
-| 5 | Purchase order, promotion, KHQR / ABA, commission | |
+| 5 | Customers + loyalty points, promotions, price / barcode labels, Bakong KHQR (dynamic + auto check), cash in / out, layaway, exchange, profit + slow stock reports, supplier debts, Excel export | ✅ |
+| 6 | Purchase order, commission | |

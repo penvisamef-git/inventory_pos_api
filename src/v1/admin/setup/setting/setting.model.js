@@ -45,6 +45,13 @@ const settingSchema = new mongoose.Schema(
     receipt_footer: { type: String, default: "សូមអរគុណ!" },
     receipt_template: { type: String, enum: RECEIPT_TEMPLATES, default: "classic" }, // POS receipt style (24)
 
+    // ---- Loyalty (customers earn points on the POS, spend them as a payment) ----
+    loyalty_enabled: { type: Boolean, default: true },
+    points_per_usd: { type: Number, default: 1, min: 0 }, // $1 paid = 1 point (whole points, rounded down)
+    point_value_usd: { type: Number, default: 0.01, min: 0 }, // 1 point = $0.01 → 100 points = $1
+    min_redeem_points: { type: Number, default: 100, min: 0 }, // smallest number of points a customer can use
+    birthday_notified_on: { type: String, default: "" }, // "YYYY-MM-DD" of the last Telegram birthday list
+
     // ---- Stock alerts ----
     low_stock_default: { type: Number, default: 5, min: 0 },
     expiry_alert_days: { type: Number, default: 30, min: 0 },

@@ -88,6 +88,25 @@ app.get("/health", async (req, res) => {
   res.set("Cache-Control", "no-store").json({ ok: db === "ok", db, ms: Date.now() - t });
 });
 
+// Time-based jobs for hosts without a background process (Vercel): Telegram schedules, POS offline alerts,
+// sending the Telegram queue. Call every 1–10 min from cron-job.org / GitHub Actions with the secret:
+//   GET /api/cron/tick   header "x-cron-key: <CRON_SECRET>"  (or ?key=<CRON_SECRET>)
+const crypto = require("crypto");
+app.all("/api/cron/tick", async (req, res) => {
+  const secret = process.env.CRON_SECRET || "";
+  const given = String(req.get("x-cron-key") || req.query.key || "");
+  if (!secret) return res.status(503).json({ success: false, message: "CRON_SECRET is not set on the server" });
+  const ok = given.length === secret.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret));
+  if (!ok) return res.status(401).json({ success: false, message: "Wrong cron key" });
+  try {
+    while (mongoose.connection.readyState !== 1) await new Promise((r) => setTimeout(r, 100));
+    const data = await require("./src/v1/admin/telegram/telegram.service").cronTick();
+    res.set("Cache-Control", "no-store").json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.get("/", api_auth, (req, res) => {
   res.send({
     success: true,
